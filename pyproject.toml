@@ -1,0 +1,30 @@
+[project]
+name = "income-demo"
+version = "0.1.0"
+description = "FastAPI backend with Strands Agents for Deming Insurance Portal"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "strands-agents",
+    "pydantic-settings",
+    "sse-starlette",
+]
+
+[dependency-groups]
+dev = ["ruff", "pyrefly"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+ignore = ["E501"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.pyrefly]
+project_includes = ["app"]
+python_version = "3.13"
