@@ -1,14 +1,38 @@
 """FastAPI application entry point."""
 
+from contextlib import asynccontextmanager
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import router
+from app.config import settings
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan handler for startup and shutdown events."""
+    # Startup: Initialize database and create directories
+    from app.db.init_db import initialize_database
+    
+    # Ensure upload directory exists
+    Path(settings.upload_dir).mkdir(parents=True, exist_ok=True)
+    
+    # Initialize database with tables and seed data
+    await initialize_database()
+    
+    yield
+    
+    # Shutdown: Cleanup if needed
+    pass
+
 
 app = FastAPI(
     title="Income Demo API",
-    description="FastAPI backend with Strands Agents for Deming Insurance Portal",
-    version="0.1.0",
+    description="FastAPI backend with Strands Agents for Deming Insurance Portal with eKYC",
+    version="0.2.0",
+    lifespan=lifespan,
 )
 
 # Configure CORS
@@ -30,7 +54,8 @@ async def root():
     return {
         "status": "healthy",
         "message": "Income Demo API is running",
-        "version": "0.1.0",
+        "version": "0.2.0",
+        "features": ["chat", "ekyc"],
     }
 
 
@@ -40,5 +65,11 @@ async def health():
     return {
         "status": "healthy",
         "service": "income-demo",
-        "version": "0.1.0",
+        "version": "0.2.0",
+        "database": "sqlite",
+        "features": {
+            "chat": True,
+            "user_signup": True,
+            "ekyc": True,
+        },
     }

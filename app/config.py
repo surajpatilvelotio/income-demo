@@ -16,5 +16,13 @@ class Settings(BaseSettings):
     # Session
     session_storage_dir: str = "./sessions"
 
+    # Database
+    database_url: str = "sqlite+aiosqlite:///./ekyc.db"
+    database_echo: bool = False
+
+    # File uploads
+    upload_dir: str = "./uploads"
+    max_upload_size: int = 10 * 1024 * 1024  # 10MB
+
 
 settings = Settings()

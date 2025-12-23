@@ -57,3 +57,5 @@ sessions/
 # Logs
 *.log
 logs/
+ekyc.db
+uploads/*
