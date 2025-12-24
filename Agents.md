@@ -1,27 +1,28 @@
 # Agent Instructions
 
-This document provides guidelines and instructions for developing and managing agents within the Income Demo - Deming Insurance Portal backend service.
+This document provides guidelines for developing and managing agents within the eKYC backend service.
 
 ## Overview
 
-The Income Demo uses the Strands Agents SDK to provide AI-powered conversational capabilities through Amazon Bedrock's Claude models. The system is designed to be simple, extensible, and production-ready.
+The system uses the Strands Agents SDK to provide AI-powered conversational capabilities through Amazon Bedrock's Claude models.
 
 ## Architecture
 
 ### Agent Factory (`app/agent/factory.py`)
 
-The `create_agent()` function is the central factory for creating Strands agent instances. It handles:
+The `create_agent()` function is the central factory for creating Strands agent instances:
 
 - **Session Management**: Uses `FileSessionManager` for local persistence of conversation history and agent state
 - **Model Configuration**: Configures the BedrockModel with settings from environment variables
 - **System Prompts**: Applies the system prompt to guide agent behavior
+- **State Persistence**: Uses custom `SessionStateStore` for persisting agent state across calls
 
 **Usage:**
 ```python
 from app.agent import create_agent
 
-agent = create_agent(session_id="user-123")
-response = agent("Hello, how can you help me?")
+agent = create_agent(session_id="user-123", include_kyc_tools=True)
+response = agent("Start my KYC verification")
 ```
 
 ### LLM Configuration (`app/agent/llm.py`)
@@ -36,23 +37,36 @@ The `get_bedrock_model()` function returns a configured BedrockModel instance:
 
 System prompts define the agent's behavior and personality:
 
-- **Current Prompt**: Generic helpful assistant for insurance queries
+- **KYC Agent Prompt**: Guides users through identity verification
 - **Customization**: Modify `SYSTEM_PROMPT` to change agent behavior
 - **Best Practices**:
   - Be clear about the agent's role and capabilities
   - Include guidelines for handling edge cases
   - Specify tone and style expectations
 
-## Session Management
+### OCR Agent (`app/agent/ocr_agent.py`)
 
-Sessions are managed locally using Strands' built-in `FileSessionManager`:
+Specialized agent for document text extraction using Claude's vision capabilities:
 
-- **Storage Location**: `./sessions/` (configurable via `SESSION_STORAGE_DIR`)
-- **Session ID**: Unique identifier per user/conversation
-- **Persistence**: Conversation history and agent state are automatically saved
-- **Multi-turn**: Supports multi-turn conversations with context retention
+- Uses Bedrock's `invoke_model` API for image processing
+- Extracts structured identity data from ID cards and passports
+- Supports mock mode for testing (`USE_REAL_OCR` config)
 
-**Session Structure:**
+### KYC Workflow (`app/agent/kyc_workflow.py`)
+
+Orchestrates the KYC verification process:
+
+1. **OCR Step**: Extract data from documents (parallel processing)
+2. **User Review**: Present extracted data for confirmation
+3. **Government Verification**: Check against mock government database
+4. **Fraud Detection**: Run fraud indicators check
+5. **Decision**: Approve, reject, or flag for manual review
+
+## Session & State Management
+
+### Session Storage
+Sessions are managed using Strands' `FileSessionManager`:
+
 ```
 sessions/
 └── session_<session_id>/
@@ -63,143 +77,87 @@ sessions/
             └── messages/
 ```
 
-## API Endpoints
+### State Persistence (`app/agent/state_store.py`)
+Custom state store for persisting agent state (user_id, application_id, workflow_stage):
 
-### POST /chat/
-
-Non-streaming chat endpoint for simple request/response interactions.
-
-**Request:**
-```json
-{
-  "message": "What insurance options are available?",
-  "session_id": "user-123"
-}
+```
+sessions/state/
+└── <session_id>.json
 ```
 
-**Response:**
-```json
-{
-  "response": "We offer various insurance options...",
-  "session_id": "user-123"
-}
-```
+## Agent Tools
 
-### POST /chat/stream
+Tools are defined in `app/agent/tools/`:
 
-Streaming chat endpoint using Server-Sent Events (SSE) for real-time responses.
+| Tool | Purpose |
+|------|---------|
+| `register_user` | Create new user account |
+| `find_user_by_email` | Look up user by email |
+| `initiate_kyc_process` | Start KYC application |
+| `upload_kyc_document` | Upload document via chat |
+| `get_uploaded_documents` | List uploaded documents |
+| `run_ocr_extraction` | Extract data from documents |
+| `confirm_and_verify` | Run full verification workflow |
+| `get_kyc_status` | Get application status |
+| `update_kyc_stage` | Track processing stages |
+| `verify_with_government` | Government DB check |
+| `check_fraud_indicators` | Fraud detection |
+| `make_kyc_decision` | Final approval/rejection |
 
-**Request:**
-```json
-{
-  "message": "Explain the benefits of term life insurance",
-  "session_id": "user-123"
-}
-```
+### Adding New Tools
 
-**Response:** Stream of SSE events with incremental text chunks.
-
-## Configuration
-
-All configuration is managed through environment variables (see `.env.example`):
-
-- `AWS_REGION`: AWS region for Bedrock (default: us-east-1)
-- `AWS_ACCESS_KEY_ID`: AWS access key
-- `AWS_SECRET_ACCESS_KEY`: AWS secret key
-- `MODEL_ID`: Bedrock model identifier (default: Claude 3 Haiku)
-- `TEMPERATURE`: Model temperature for response randomness (0.0-1.0)
-- `SESSION_STORAGE_DIR`: Directory for session storage
-
-## Development
-
-### Running Locally
-
-```bash
-# Install dependencies
-make install
-
-# Run development server
-make dev
-
-# Format code
-make fmt
-
-# Lint code
-make lint
-
-# Type check
-make typecheck
-```
-
-### Adding Tools
-
-To add custom tools for the agent:
-
-1. Create a tool function in a new file under `app/agent/tools/`
+1. Create a tool function in `app/agent/tools/`
 2. Decorate with `@tool` from Strands
-3. Import and pass to the agent in `factory.py`
+3. Import and add to `ALL_TOOLS` in `__init__.py`
 
 **Example:**
 ```python
 from strands import tool
 
 @tool
-def calculate_premium(age: int, coverage: int) -> dict:
-    """Calculate insurance premium based on age and coverage."""
-    # Implementation here
-    return {"premium": calculated_amount}
+def my_custom_tool(param1: str, param2: int) -> dict:
+    """Tool description for the LLM."""
+    # Implementation
+    return {"success": True, "result": "..."}
 ```
 
-### Extending the Agent
+## Configuration
 
-To customize agent behavior:
+Environment variables (see `.env.example`):
 
-1. **Modify System Prompt**: Edit `app/agent/prompts.py`
-2. **Add Tools**: Create tools in `app/agent/tools/`
-3. **Adjust Model Settings**: Update `.env` file
-4. **Custom Logic**: Extend `factory.py` for advanced configurations
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `AWS_REGION` | AWS region for Bedrock | `us-east-1` |
+| `MODEL_ID` | Bedrock model identifier | Claude 3 Haiku |
+| `TEMPERATURE` | Model temperature (0.0-1.0) | `0.7` |
+| `SESSION_STORAGE_DIR` | Session storage directory | `./sessions` |
+| `USE_REAL_OCR` | Use real OCR vs mock | `true` |
 
 ## Best Practices
 
 1. **Session Management**: Always use unique session IDs per user/conversation
-2. **Error Handling**: The agent handles most errors gracefully, but validate input in routes
-3. **Streaming**: Use `/chat/stream` for better user experience in chat interfaces
-4. **Model Selection**: Claude Haiku is fast and affordable; upgrade to Sonnet for more complex tasks
-5. **Security**: Never commit `.env` files; use appropriate AWS IAM permissions
-6. **Testing**: Test with various session IDs to ensure proper isolation
+2. **State Persistence**: Use `ToolContext` to store/retrieve state within tools
+3. **Timeouts**: Long operations (OCR, verification) use 120s timeout
+4. **Error Handling**: Tools return `{"success": False, "error": "..."}` on failure
+5. **Streaming**: Use `/kyc/chat/stream/upload` for real-time responses
 
 ## Troubleshooting
 
 ### Agent Not Responding
-
 - Check AWS credentials are configured correctly
 - Verify Bedrock model access is enabled in AWS console
 - Check logs for authentication errors
 
-### Session Issues
+### OCR Timeout
+- OCR can take 60+ seconds for complex documents
+- Timeout is set to 120 seconds
+- Check network connectivity to AWS Bedrock
 
-- Ensure `sessions/` directory exists and is writable
-- Check session_id is being passed correctly
-- Verify `SESSION_STORAGE_DIR` path is valid
-
-### Import Errors
-
-- Run `uv sync` to ensure all dependencies are installed
-- Check Python version is 3.13+
-
-## Future Enhancements
-
-Areas for future development:
-
-- **eKYC Tools**: Add specific tools for identity verification
-- **Document Processing**: Integrate document analysis capabilities
-- **Multi-Agent**: Implement specialized agents for different insurance domains
-- **Analytics**: Add logging and metrics for agent performance
-- **Security**: Implement PII redaction and guardrails
+### State Not Persisting
+- Verify `sessions/state/` directory exists and is writable
+- Check session_id is consistent across calls
 
 ## Resources
 
 - [Strands Agents Documentation](https://strandsagents.com/latest/documentation/docs/)
-- [FastAPI Documentation](https://fastapi.tiangolo.com/)
 - [Amazon Bedrock](https://aws.amazon.com/bedrock/)
-
