@@ -743,7 +743,8 @@ def run_ocr_extraction(tool_context: ToolContext, application_id: str | None = N
             }
     
     try:
-        result = run_sync(_run_ocr())
+        # OCR can take 60+ seconds for complex documents, increase timeout
+        result = run_sync(_run_ocr(), timeout=120)
         # Update state based on OCR result
         if result.get("success"):
             tool_context.agent.state.set("workflow_stage", "ocr_completed")
@@ -753,6 +754,9 @@ def run_ocr_extraction(tool_context: ToolContext, application_id: str | None = N
             # OCR failed - set appropriate workflow stage
             tool_context.agent.state.set("workflow_stage", "ocr_failed")
         return result
+    except TimeoutError:
+        tool_context.agent.state.set("workflow_stage", "ocr_failed")
+        return {"success": False, "error": "OCR processing timed out. Please try again or upload a clearer image."}
     except Exception as e:
         tool_context.agent.state.set("workflow_stage", "ocr_failed")
         return {"success": False, "error": str(e)}
@@ -830,7 +834,8 @@ def confirm_and_verify(tool_context: ToolContext, user_confirmed: bool = True, c
         return verification_result
     
     try:
-        result = run_sync(_verify())
+        # Verification can take time for gov DB and fraud checks, increase timeout
+        result = run_sync(_verify(), timeout=120)
         # Update state with final result
         if result.get("status") == "approved":
             tool_context.agent.state.set("workflow_stage", "completed")
@@ -841,6 +846,8 @@ def confirm_and_verify(tool_context: ToolContext, user_confirmed: bool = True, c
             tool_context.agent.state.set("kyc_status", result.get("status"))
             tool_context.agent.state.set("kyc_decision", result.get("decision", "rejected"))
         return result
+    except TimeoutError:
+        return {"success": False, "error": "Verification timed out. Please try again."}
     except Exception as e:
         return {"success": False, "error": str(e)}
 

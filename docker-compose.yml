@@ -17,9 +17,7 @@ services:
       retries: 5
 
   app:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    build: .
     container_name: ekyc-app
     ports:
       - "8000:8000"
@@ -44,4 +42,3 @@ volumes:
   postgres_data:
   uploads:
   sessions:
-

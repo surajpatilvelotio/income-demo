@@ -2,6 +2,7 @@
 
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.pool import NullPool
 
 from app.config import settings
 
@@ -13,11 +14,12 @@ class Base(DeclarativeBase):
 
 
 # Create async engine for PostgreSQL
+# Using NullPool to avoid connection pool issues when running async code
+# from multiple event loops (via run_sync helper in tools)
 engine = create_async_engine(
     settings.database_url,
     echo=settings.database_echo,
-    pool_size=5,
-    max_overflow=10,
+    poolclass=NullPool,
 )
 
 # Create async session factory

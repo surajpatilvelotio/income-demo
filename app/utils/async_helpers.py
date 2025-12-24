@@ -12,7 +12,7 @@ from typing import Any, Coroutine, TypeVar
 T = TypeVar("T")
 
 
-def run_sync(coro: Coroutine[Any, Any, T], timeout: float = 30) -> T:
+def run_sync(coro: Coroutine[Any, Any, T], timeout: float = 60) -> T:
     """
     Run an async coroutine in a sync context.
     
