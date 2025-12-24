@@ -1,114 +1,98 @@
-"""eKYC Agent factory for identity verification processing."""
+"""
+eKYC Agent using the KYC Workflow pattern.
 
-from strands import Agent
-from strands.session.file_session_manager import FileSessionManager
+This module provides the main entry point for KYC processing,
+using a sequential workflow: OCR → User Review → Gov Verification → Fraud Detection
+"""
 
-from app.agent.llm import get_bedrock_model
-from app.agent.ekyc_prompts import EKYC_SYSTEM_PROMPT
-from app.agent.tools import (
-    extract_document_data,
-    parse_identity_info,
-    verify_with_government,
-    check_fraud_indicators,
-    make_kyc_decision,
-    update_kyc_stage,
-)
-from app.config import settings
+import asyncio
+import logging
+import time
+
+from app.agent.kyc_workflow import KYCWorkflow, process_kyc_workflow
+
+logger = logging.getLogger(__name__)
 
 
-def create_ekyc_agent(session_id: str) -> Agent:
+def process_kyc_application(application_id: str, documents: list[dict]) -> dict:
     """
-    Create a specialized eKYC verification agent.
+    Process a KYC application using the workflow pattern.
     
-    This agent is equipped with tools for document OCR, data extraction,
-    government verification, fraud detection, and KYC decision making.
-
-    Args:
-        session_id: Unique identifier for the session (typically application_id)
-
-    Returns:
-        Agent: Configured eKYC agent instance with all verification tools
-    """
-    session_manager = FileSessionManager(
-        session_id=f"ekyc-{session_id}",
-        storage_dir=settings.session_storage_dir,
-    )
-    
-    return Agent(
-        model=get_bedrock_model(),
-        system_prompt=EKYC_SYSTEM_PROMPT,
-        session_manager=session_manager,
-        tools=[
-            extract_document_data,
-            parse_identity_info,
-            verify_with_government,
-            check_fraud_indicators,
-            make_kyc_decision,
-            update_kyc_stage,
-        ],
-        callback_handler=None,
-    )
-
-
-def process_kyc_application(
-    application_id: str,
-    documents: list[dict],
-) -> dict:
-    """
-    Process a KYC application using the eKYC agent.
-    
-    This function creates an eKYC agent and instructs it to process
-    the uploaded documents through all verification stages.
-    
-    Note: This is a synchronous function because the Strands agent
-    uses synchronous calls internally.
+    This is the main entry point for background KYC processing.
+    Uses the sequential workflow:
+    1. OCR extraction
+    2. User review (auto-confirmed in background)
+    3. Government database verification
+    4. Fraud detection (only if gov verification passes)
+    5. Final decision
     
     Args:
         application_id: The KYC application ID
-        documents: List of document info dicts with file_path, document_type
+        documents: List of document info dicts with file_path, document_type, original_filename
         
     Returns:
-        dict: Processing result with decision and extracted data
+        dict: Processing result with decision
     """
-    agent = create_ekyc_agent(application_id)
+    logger.info(f"=" * 60)
+    logger.info(f"[KYC Processing] Starting for application: {application_id}")
+    logger.info(f"[KYC Processing] Documents: {len(documents)}")
+    logger.info(f"=" * 60)
     
-    # Build the processing prompt
-    docs_info = "\n".join([
-        f"- {doc['document_type']}: {doc['file_path']}"
-        for doc in documents
-    ])
+    max_retries = 3
+    retry_delay = 1
     
-    prompt = f"""Process the following KYC application:
-
-Application ID: {application_id}
-
-Uploaded Documents:
-{docs_info}
-
-Please process this application through all verification stages:
-1. First, update the stage to 'document_uploaded' as completed
-2. Extract data from each document using OCR
-3. Parse and structure the identity information
-4. Verify the identity against the government database
-5. Check for fraud indicators
-6. Make a final KYC decision
-
-Update the stage status after completing each step. Provide a comprehensive summary of your findings and final decision.
-"""
-    
-    # Run the agent (synchronous call)
-    result = agent(prompt)
-    
-    # Extract response text
-    response_text = ""
-    if result.message and result.message.get("content"):
-        for content_block in result.message.get("content", []):
-            if isinstance(content_block, dict) and "text" in content_block:
-                response_text += content_block["text"]
+    for attempt in range(max_retries):
+        try:
+            # Run the async workflow in sync context
+            result = asyncio.run(process_kyc_workflow(application_id, documents))
+            
+            logger.info(f"=" * 60)
+            logger.info(f"[KYC Processing] Completed for application: {application_id}")
+            
+            final_result = result.get("final_result", {})
+            decision = final_result.get("decision", final_result.get("status", "unknown"))
+            logger.info(f"[KYC Processing] Decision: {decision}")
+            logger.info(f"=" * 60)
+            
+            return {
+                "application_id": application_id,
+                "processing_complete": True,
+                "result": result,
+            }
+            
+        except PermissionError as e:
+            logger.warning(f"Attempt {attempt + 1}/{max_retries}: PermissionError: {e}")
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay * (attempt + 1))
+            else:
+                logger.error(f"All {max_retries} attempts failed due to PermissionError")
+                return {
+                    "application_id": application_id,
+                    "processing_complete": False,
+                    "error": f"File access error after {max_retries} attempts: {str(e)}",
+                }
+                
+        except Exception as e:
+            logger.error(f"[KYC Processing] Error: {e}", exc_info=True)
+            return {
+                "application_id": application_id,
+                "processing_complete": False,
+                "error": str(e),
+            }
     
     return {
         "application_id": application_id,
-        "processing_complete": True,
-        "agent_response": response_text,
+        "processing_complete": False,
+        "error": "Unknown error during processing",
     }
 
+
+# Legacy function for backward compatibility
+def create_ekyc_agent(session_id: str):
+    """
+    Legacy function - now returns a workflow manager instead.
+    
+    The eKYC processing now uses a workflow pattern instead of a single agent.
+    """
+    logger.warning("create_ekyc_agent is deprecated. Use process_kyc_application instead.")
+    return KYCWorkflow(session_id)

@@ -1,125 +1,120 @@
 """Government database verification tool."""
 
+import asyncio
+import concurrent.futures
 from strands import tool
 
 from app.db.database import AsyncSessionLocal
 from app.db.models import MockGovernmentRecord
 from sqlalchemy import select
-import asyncio
 
 
-def _sync_verify(document_number: str, document_type: str, first_name: str, last_name: str, date_of_birth: str) -> dict:
-    """Synchronous wrapper for database verification."""
-    
-    async def _async_verify():
-        async with AsyncSessionLocal() as session:
-            # Query mock government database
-            result = await session.execute(
-                select(MockGovernmentRecord).where(
-                    MockGovernmentRecord.document_number == document_number
-                )
+async def _async_verify(document_number: str, document_type: str, first_name: str, last_name: str, date_of_birth: str) -> dict:
+    """Async implementation for database verification."""
+    async with AsyncSessionLocal() as session:
+        # Query mock government database
+        result = await session.execute(
+            select(MockGovernmentRecord).where(
+                MockGovernmentRecord.document_number == document_number
             )
-            record = result.scalar_one_or_none()
-            
-            if not record:
-                return {
-                    "success": True,
-                    "verified": False,
-                    "verification_status": "not_found",
-                    "message": f"No government record found for document number: {document_number}",
-                    "details": {
-                        "document_number": document_number,
-                        "document_type": document_type,
-                    },
-                }
-            
-            # Check if document is valid
-            if not record.is_valid:
-                return {
-                    "success": True,
-                    "verified": False,
-                    "verification_status": "invalid",
-                    "message": f"Document is not valid: {record.flag_reason or 'Unknown reason'}",
-                    "details": {
-                        "document_number": document_number,
-                        "flag_reason": record.flag_reason,
-                    },
-                }
-            
-            # Check if document is flagged
-            if record.is_flagged:
-                return {
-                    "success": True,
-                    "verified": False,
-                    "verification_status": "flagged",
-                    "message": f"Document is flagged: {record.flag_reason}",
-                    "details": {
-                        "document_number": document_number,
-                        "flag_reason": record.flag_reason,
-                        "is_flagged": True,
-                    },
-                }
-            
-            # Verify name matches
-            name_match = (
-                record.first_name.lower() == first_name.lower() and
-                record.last_name.lower() == last_name.lower()
-            )
-            
-            # Verify date of birth matches
-            dob_match = str(record.date_of_birth) == date_of_birth
-            
-            # Verify document type matches
-            type_match = record.document_type == document_type
-            
-            mismatches = []
-            if not name_match:
-                mismatches.append(f"Name mismatch: expected {record.first_name} {record.last_name}")
-            if not dob_match:
-                mismatches.append(f"DOB mismatch: expected {record.date_of_birth}")
-            if not type_match:
-                mismatches.append(f"Document type mismatch: expected {record.document_type}")
-            
-            if mismatches:
-                return {
-                    "success": True,
-                    "verified": False,
-                    "verification_status": "mismatch",
-                    "message": "Document data does not match government records",
-                    "details": {
-                        "document_number": document_number,
-                        "mismatches": mismatches,
-                    },
-                }
-            
-            # All checks passed
+        )
+        record = result.scalar_one_or_none()
+        
+        if not record:
             return {
                 "success": True,
-                "verified": True,
-                "verification_status": "verified",
-                "message": "Document successfully verified against government database",
+                "verified": False,
+                "verification_status": "not_found",
+                "message": f"No government record found for document number: {document_number}",
                 "details": {
                     "document_number": document_number,
                     "document_type": document_type,
-                    "name_verified": True,
-                    "dob_verified": True,
-                    "government_record": {
-                        "first_name": record.first_name,
-                        "last_name": record.last_name,
-                        "date_of_birth": str(record.date_of_birth),
-                        "address": record.address,
-                    },
                 },
             }
-    
-    # Run async function in sync context
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-    
-    return loop.run_until_complete(_async_verify())
+        
+        # Check if document is valid
+        if not record.is_valid:
+            return {
+                "success": True,
+                "verified": False,
+                "verification_status": "invalid",
+                "message": f"Document is not valid: {record.flag_reason or 'Unknown reason'}",
+                "details": {
+                    "document_number": document_number,
+                    "flag_reason": record.flag_reason,
+                },
+            }
+        
+        # Check if document is flagged
+        if record.is_flagged:
+            return {
+                "success": True,
+                "verified": False,
+                "verification_status": "flagged",
+                "message": f"Document is flagged: {record.flag_reason}",
+                "details": {
+                    "document_number": document_number,
+                    "flag_reason": record.flag_reason,
+                    "is_flagged": True,
+                },
+            }
+        
+        # Verify name matches
+        name_match = (
+            record.first_name.lower() == first_name.lower() and
+            record.last_name.lower() == last_name.lower()
+        )
+        
+        # Verify date of birth matches
+        dob_match = str(record.date_of_birth) == date_of_birth
+        
+        # Verify document type matches
+        type_match = record.document_type == document_type
+        
+        mismatches = []
+        if not name_match:
+            mismatches.append(f"Name mismatch: expected {record.first_name} {record.last_name}")
+        if not dob_match:
+            mismatches.append(f"DOB mismatch: expected {record.date_of_birth}")
+        if not type_match:
+            mismatches.append(f"Document type mismatch: expected {record.document_type}")
+        
+        if mismatches:
+            return {
+                "success": True,
+                "verified": False,
+                "verification_status": "mismatch",
+                "message": "Document data does not match government records",
+                "details": {
+                    "document_number": document_number,
+                    "mismatches": mismatches,
+                },
+            }
+        
+        # All checks passed
+        return {
+            "success": True,
+            "verified": True,
+            "verification_status": "verified",
+            "message": "Document successfully verified against government database",
+            "details": {
+                "document_number": document_number,
+                "document_type": document_type,
+                "name_verified": True,
+                "dob_verified": True,
+                "government_record": {
+                    "first_name": record.first_name,
+                    "last_name": record.last_name,
+                    "date_of_birth": str(record.date_of_birth),
+                    "address": record.address,
+                },
+            },
+        }
+
+
+def _run_async_verification(document_number: str, document_type: str, first_name: str, last_name: str, date_of_birth: str) -> dict:
+    """Run async verification in a new event loop (for thread execution)."""
+    return asyncio.run(_async_verify(document_number, document_type, first_name, last_name, date_of_birth))
 
 
 @tool
@@ -152,13 +147,17 @@ def verify_with_government(
         - details: Additional verification details
     """
     try:
-        return _sync_verify(
-            document_number=document_number,
-            document_type=document_type,
-            first_name=first_name,
-            last_name=last_name,
-            date_of_birth=date_of_birth,
-        )
+        # Run async verification in a separate thread to avoid event loop conflicts
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(
+                _run_async_verification,
+                document_number,
+                document_type,
+                first_name,
+                last_name,
+                date_of_birth,
+            )
+            return future.result(timeout=30)
     except Exception as e:
         return {
             "success": False,

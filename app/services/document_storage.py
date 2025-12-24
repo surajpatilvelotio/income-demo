@@ -52,9 +52,12 @@ class DocumentStorageService:
         """
         app_dir = self._get_application_dir(application_id)
         
-        # Generate unique filename with original extension
+        # Preserve original filename (sanitized) with unique suffix to avoid collisions
+        # This allows OCR tool to detect test hints in filename (e.g., "john", "success")
+        original_stem = Path(original_filename).stem
         ext = Path(original_filename).suffix.lower()
-        generated_filename = f"{document_type}_{uuid.uuid4().hex}{ext}"
+        unique_suffix = uuid.uuid4().hex[:8]
+        generated_filename = f"{original_stem}_{unique_suffix}{ext}"
         file_path = app_dir / generated_filename
         
         # Write file content

@@ -24,5 +24,10 @@ class Settings(BaseSettings):
     upload_dir: str = "./uploads"
     max_upload_size: int = 10 * 1024 * 1024  # 10MB
 
+    # OCR Configuration
+    # Set to True to use real vision-based OCR (Bedrock Claude)
+    # Set to False to use mock OCR data (for testing without API calls)
+    use_real_ocr: bool = True
+
 
 settings = Settings()

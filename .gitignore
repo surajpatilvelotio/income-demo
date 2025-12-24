@@ -59,3 +59,4 @@ sessions/
 logs/
 ekyc.db
 uploads/*
+USER_WORKFLOW.md

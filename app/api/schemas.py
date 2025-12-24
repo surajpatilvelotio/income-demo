@@ -10,6 +10,17 @@ from pydantic import BaseModel, Field, EmailStr
 # Chat Schemas
 # ============================================
 
+class DocumentAttachment(BaseModel):
+    """Model for document attachment in chat."""
+
+    data: str = Field(..., description="Base64-encoded document data")
+    filename: str = Field(..., description="Original filename (e.g., 'my_id.png')")
+    document_type: str = Field(
+        ...,
+        description="Type of document: 'id_card' or 'passport'",
+    )
+
+
 class ChatRequest(BaseModel):
     """Request model for chat endpoints."""
 
@@ -18,6 +29,42 @@ class ChatRequest(BaseModel):
         None,
         description="Optional session identifier. If not provided, a new session will be created",
     )
+    user_id: str | None = Field(
+        None,
+        description="Optional user ID for returning users (e.g., after signup via /users/signup)",
+    )
+    user_email: str | None = Field(
+        None,
+        description="Optional user email for returning users (alternative to user_id)",
+    )
+    application_id: str | None = Field(
+        None,
+        description="Optional KYC application ID (e.g., from /kyc/initiate response)",
+    )
+    documents: list[DocumentAttachment] | None = Field(
+        None,
+        description="Optional list of documents to upload (max 3). Each document needs data, filename, and document_type.",
+        max_length=3,
+    )
+
+
+class KYCStageInfo(BaseModel):
+    """KYC stage information for UI display."""
+    
+    stage_name: str = Field(..., description="Name of the stage")
+    status: str = Field(..., description="Stage status: pending, in_progress, completed, failed")
+    result: dict | None = Field(None, description="Stage result data")
+    started_at: datetime | None = Field(None, description="When the stage started")
+    completed_at: datetime | None = Field(None, description="When the stage completed")
+
+
+class KYCProgressInfo(BaseModel):
+    """KYC progress information for real-time UI updates."""
+    
+    application_id: str | None = Field(None, description="KYC application ID")
+    status: str | None = Field(None, description="Overall application status")
+    current_stage: str | None = Field(None, description="Current processing stage")
+    stages: list[KYCStageInfo] | None = Field(None, description="List of all stages with their status")
 
 
 class ChatResponse(BaseModel):
@@ -25,6 +72,14 @@ class ChatResponse(BaseModel):
 
     response: str = Field(..., description="Agent's response message")
     session_id: str = Field(..., description="Session identifier used for the conversation")
+    documents_uploaded: int | None = Field(
+        None,
+        description="Number of documents uploaded in this request (if any)",
+    )
+    kyc_progress: KYCProgressInfo | None = Field(
+        None,
+        description="Current KYC processing progress (stages, status) for UI display",
+    )
 
 
 # ============================================

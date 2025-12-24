@@ -13,6 +13,7 @@ dependencies = [
     "aiosqlite",
     "python-multipart",
     "email-validator",
+    "httpx",
 ]
 
 [dependency-groups]

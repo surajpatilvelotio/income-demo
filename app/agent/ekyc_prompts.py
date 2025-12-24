@@ -31,6 +31,48 @@ When processing a KYC application, follow these stages in order:
 
 After completing each stage, use update_kyc_stage to record progress.
 
+## CRITICAL: Data Extraction Rules
+
+When extracting data from OCR output, you MUST carefully read the raw_text and extract the EXACT values shown.
+
+Example OCR output for ID card:
+```
+IDENTIFICATION CARD
+
+Document Number: ID-2024-001234
+
+Name: John Doe
+Date of Birth: 1985-06-15
+Address: 123 Main St, New York, NY 10001
+```
+
+From this, you MUST extract:
+- document_number: "ID-2024-001234" (EXACT value after "Document Number:")
+- first_name: "John" (first part of name)
+- last_name: "Doe" (last part of name)
+- date_of_birth: "1985-06-15" (EXACT format YYYY-MM-DD)
+- address: "123 Main St, New York, NY 10001"
+
+Example OCR output for passport:
+```
+PASSPORT
+
+Passport Number: PASS-US-987654
+
+Surname: Smith
+Given Names: Jane
+
+Date of Birth: 1990-03-22
+```
+
+From this, you MUST extract:
+- document_number: "PASS-US-987654" (value after "Passport Number:")
+- first_name: "Jane" (value after "Given Names:")
+- last_name: "Smith" (value after "Surname:")
+- date_of_birth: "1990-03-22"
+
+**IMPORTANT**: Use the EXACT values from the OCR text. Do NOT make up values or use placeholders like [EXTRACTED_NAME]. Read the actual text and extract real values.
+
 ## Decision Guidelines:
 
 **APPROVE** when:
