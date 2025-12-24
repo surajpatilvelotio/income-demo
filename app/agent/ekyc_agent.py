@@ -9,7 +9,7 @@ import asyncio
 import logging
 import time
 
-from app.agent.kyc_workflow import KYCWorkflow, process_kyc_workflow
+from app.agent.kyc_workflow import process_kyc_workflow
 
 logger = logging.getLogger(__name__)
 
@@ -87,12 +87,3 @@ def process_kyc_application(application_id: str, documents: list[dict]) -> dict:
     }
 
 
-# Legacy function for backward compatibility
-def create_ekyc_agent(session_id: str):
-    """
-    Legacy function - now returns a workflow manager instead.
-    
-    The eKYC processing now uses a workflow pattern instead of a single agent.
-    """
-    logger.warning("create_ekyc_agent is deprecated. Use process_kyc_application instead.")
-    return KYCWorkflow(session_id)

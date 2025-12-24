@@ -11,7 +11,6 @@ https://strandsagents.com/latest/documentation/docs/user-guide/concepts/multi-ag
 """
 
 import asyncio
-import json
 import logging
 from datetime import datetime, timezone
 from enum import Enum
@@ -364,6 +363,9 @@ class KYCWorkflow:
         """
         Step 5: Make final KYC decision based on all checks.
         
+        Uses update_kyc_stage() for all DB updates to avoid redundancy.
+        The stage tracker handles updating both application and user status.
+        
         Returns:
             dict: Final decision
         """
@@ -375,7 +377,7 @@ class KYCWorkflow:
             status="in_progress",
         )
         
-        # Determine decision
+        # Determine decision based on verification results
         gov_verified = self.gov_verification_result and self.gov_verification_result.get("verified", False)
         fraud_risk = self.fraud_check_result.get("risk_level", "unknown") if self.fraud_check_result else "unknown"
         
@@ -384,7 +386,9 @@ class KYCWorkflow:
             self.decision_reason = "Government database verification failed."
         elif fraud_risk in ["high", "critical"]:
             self.final_decision = "rejected"
-            self.decision_reason = f"High fraud risk detected: {', '.join(self.fraud_check_result.get('indicators', []))}"
+            fraud_indicators = self.fraud_check_result.get("fraud_indicators", [])
+            indicator_messages = [i.get("message", "") for i in fraud_indicators if i.get("severity") in ["high", "critical"]]
+            self.decision_reason = f"High fraud risk detected: {', '.join(indicator_messages) or fraud_risk}"
         else:
             self.final_decision = "approved"
             self.decision_reason = "All verification checks passed successfully."
@@ -392,33 +396,12 @@ class KYCWorkflow:
         logger.info(f"   Decision: {self.final_decision.upper()}")
         logger.info(f"   Reason: {self.decision_reason}")
         
-        # Update application and user
-        async with AsyncSessionLocal() as session:
-            result = await session.execute(
-                select(KYCApplication).where(KYCApplication.id == self.application_id)
-            )
-            application = result.scalar_one_or_none()
-            if application:
-                application.status = "completed"
-                application.decision = self.final_decision
-                application.decision_reason = self.decision_reason
-                application.current_stage = "completed"
-                await session.commit()
-                
-                # Update user status
-                user_result = await session.execute(
-                    select(User).where(User.id == application.user_id)
-                )
-                user = user_result.scalar_one_or_none()
-                if user:
-                    user.kyc_status = self.final_decision
-                    await session.commit()
-        
+        # Update stage with decision - this also updates application and user status
         update_kyc_stage(
             application_id=self.application_id,
             stage_name="decision_made",
             status="completed",
-            result_data={"decision": self.final_decision, "reason": self.decision_reason},
+            result_data={"decision": self.final_decision, "decision_reason": self.decision_reason},
         )
         
         if self.final_decision == "approved":

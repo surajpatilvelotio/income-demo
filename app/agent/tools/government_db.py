@@ -1,12 +1,11 @@
 """Government database verification tool."""
 
-import asyncio
-import concurrent.futures
 from strands import tool
+from sqlalchemy import select
 
 from app.db.database import AsyncSessionLocal
 from app.db.models import MockGovernmentRecord
-from sqlalchemy import select
+from app.utils.async_helpers import run_sync
 
 
 async def _async_verify(document_number: str, document_type: str, first_name: str, last_name: str, date_of_birth: str) -> dict:
@@ -112,11 +111,6 @@ async def _async_verify(document_number: str, document_type: str, first_name: st
         }
 
 
-def _run_async_verification(document_number: str, document_type: str, first_name: str, last_name: str, date_of_birth: str) -> dict:
-    """Run async verification in a new event loop (for thread execution)."""
-    return asyncio.run(_async_verify(document_number, document_type, first_name, last_name, date_of_birth))
-
-
 @tool
 def verify_with_government(
     document_number: str,
@@ -147,17 +141,13 @@ def verify_with_government(
         - details: Additional verification details
     """
     try:
-        # Run async verification in a separate thread to avoid event loop conflicts
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            future = executor.submit(
-                _run_async_verification,
-                document_number,
-                document_type,
-                first_name,
-                last_name,
-                date_of_birth,
-            )
-            return future.result(timeout=30)
+        return run_sync(_async_verify(
+            document_number,
+            document_type,
+            first_name,
+            last_name,
+            date_of_birth,
+        ))
     except Exception as e:
         return {
             "success": False,

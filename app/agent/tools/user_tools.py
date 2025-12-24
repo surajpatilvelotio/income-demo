@@ -4,13 +4,11 @@ Uses Strands Agent state to maintain context across tool calls:
 https://strandsagents.com/latest/documentation/docs/user-guide/concepts/agents/state/
 """
 
-import asyncio
 import base64
 import uuid
 from pathlib import Path
 from datetime import datetime, timezone
 
-import httpx
 from strands import tool
 from strands.types.tools import ToolContext
 from sqlalchemy import select
@@ -20,16 +18,7 @@ from app.db.database import AsyncSessionLocal
 from app.db.models import User, KYCApplication, KYCDocument, KYCStage
 from app.services.password import hash_password
 from app.config import settings
-
-
-def _run_async(coro):
-    """Run async function in sync context."""
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-    return loop.run_until_complete(coro)
+from app.utils.async_helpers import run_sync
 
 
 MAX_DOCUMENTS_PER_APPLICATION = 3
@@ -84,7 +73,7 @@ def register_user(email: str, phone: str, password: str, tool_context: ToolConte
             }
     
     try:
-        result = _run_async(_register())
+        result = run_sync(_register())
         # Store user info in agent state for subsequent tool calls
         if result.get("success"):
             tool_context.agent.state.set("user_id", result["user_id"])
@@ -133,7 +122,7 @@ def get_user_status(user_id: str) -> dict:
             }
     
     try:
-        return _run_async(_get_status())
+        return run_sync(_get_status())
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -177,7 +166,7 @@ def find_user_by_email(email: str, tool_context: ToolContext) -> dict:
             }
     
     try:
-        result = _run_async(_find_user())
+        result = run_sync(_find_user())
         # Store user info in agent state
         if result.get("success"):
             tool_context.agent.state.set("user_id", result["user_id"])
@@ -265,7 +254,7 @@ def initiate_kyc_process(tool_context: ToolContext, user_id: str | None = None) 
             }
     
     try:
-        result = _run_async(_initiate())
+        result = run_sync(_initiate())
         # Store application_id in agent state
         if result.get("success"):
             tool_context.agent.state.set("application_id", result["application_id"])
@@ -343,7 +332,7 @@ def check_kyc_application_status(application_id: str) -> dict:
             }
     
     try:
-        return _run_async(_check_status())
+        return run_sync(_check_status())
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -395,7 +384,7 @@ def get_user_kyc_applications(user_id: str) -> dict:
             }
     
     try:
-        return _run_async(_get_applications())
+        return run_sync(_get_applications())
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -604,7 +593,7 @@ def upload_kyc_document(
             }
     
     try:
-        result = _run_async(_upload())
+        result = run_sync(_upload())
         # Update state with document count
         if result.get("success"):
             tool_context.agent.state.set("documents_uploaded", result["documents_uploaded"])
@@ -670,7 +659,7 @@ def get_uploaded_documents(tool_context: ToolContext, application_id: str | None
             }
     
     try:
-        return _run_async(_get_docs())
+        return run_sync(_get_docs())
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -754,7 +743,7 @@ def run_ocr_extraction(tool_context: ToolContext, application_id: str | None = N
             }
     
     try:
-        result = _run_async(_run_ocr())
+        result = run_sync(_run_ocr())
         # Update state
         if result.get("success"):
             tool_context.agent.state.set("workflow_stage", "ocr_completed")
@@ -837,7 +826,7 @@ def confirm_and_verify(tool_context: ToolContext, user_confirmed: bool = True, c
         return verification_result
     
     try:
-        result = _run_async(_verify())
+        result = run_sync(_verify())
         # Update state with final result
         if result.get("status") == "approved":
             tool_context.agent.state.set("workflow_stage", "completed")
@@ -936,7 +925,7 @@ def get_kyc_status(tool_context: ToolContext, application_id: str | None = None)
             }
     
     try:
-        result = _run_async(_get_status())
+        result = run_sync(_get_status())
         # Update state with final status
         if result.get("success"):
             tool_context.agent.state.set("kyc_status", result["status"])

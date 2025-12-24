@@ -1,14 +1,13 @@
 """Stage tracking tool for updating KYC processing stages."""
 
 from datetime import datetime, timezone
-import asyncio
-import concurrent.futures
 
 from strands import tool
+from sqlalchemy import select
 
 from app.db.database import AsyncSessionLocal
 from app.db.models import KYCApplication, KYCStage, User
-from sqlalchemy import select
+from app.utils.async_helpers import run_sync
 
 
 async def _async_update_stage(
@@ -110,11 +109,6 @@ async def _async_update_stage(
         }
 
 
-def _run_async_update(application_id: str, stage_name: str, status: str, result: dict | None = None) -> dict:
-    """Run async update in a new event loop (for thread execution)."""
-    return asyncio.run(_async_update_stage(application_id, stage_name, status, result))
-
-
 @tool
 def update_kyc_stage(
     application_id: str,
@@ -182,16 +176,7 @@ def update_kyc_stage(
                 "error": f"Invalid status: {status}. Valid statuses: {valid_statuses}",
             }
         
-        # Run async update in a separate thread to avoid event loop conflicts
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            future = executor.submit(
-                _run_async_update,
-                application_id,
-                stage_name,
-                status,
-                result_data,
-            )
-            return future.result(timeout=30)
+        return run_sync(_async_update_stage(application_id, stage_name, status, result_data))
         
     except Exception as e:
         return {

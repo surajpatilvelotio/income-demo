@@ -892,11 +892,17 @@ Look up user by email using find_user_by_email, then proceed with KYC."""
     if request.documents:
         # Save documents directly (don't pass base64 to agent - too many tokens)
         import base64
+        from app.agent.state_store import state_store as doc_state_store
+        
+        # Load persisted state to get user_id and application_id
+        persisted_state = doc_state_store.load(session_id)
         
         # Find the user's active application
         async with AsyncSessionLocal() as session:
-            # Get user_id from request or find from conversation
-            user_id = request.user_id
+            # Get user_id from request, state, or email lookup
+            user_id = request.user_id or persisted_state.get("user_id")
+            application_id = request.application_id or persisted_state.get("application_id")
+            
             if not user_id and request.user_email:
                 result = await session.execute(
                     select(User).where(User.email == request.user_email)
@@ -905,8 +911,17 @@ Look up user by email using find_user_by_email, then proceed with KYC."""
                 if user:
                     user_id = user.id
             
-            if user_id:
-                # Find active application
+            application = None
+            
+            # First try to get application by ID from state
+            if application_id:
+                result = await session.execute(
+                    select(KYCApplication).where(KYCApplication.id == application_id)
+                )
+                application = result.scalar_one_or_none()
+            
+            # Fall back to finding by user_id
+            if not application and user_id:
                 result = await session.execute(
                     select(KYCApplication)
                     .where(KYCApplication.user_id == user_id)
@@ -914,55 +929,56 @@ Look up user by email using find_user_by_email, then proceed with KYC."""
                     .order_by(KYCApplication.created_at.desc())
                 )
                 application = result.scalar_one_or_none()
+            
+            if application:
+                # Save each document
+                saved_docs = []
+                for doc in request.documents:
+                    try:
+                        import io
+                        file_content = base64.b64decode(doc.data)
+                        file_obj = io.BytesIO(file_content)
+                        file_path, _ = document_storage.save_document(
+                            application_id=application.id,
+                            file=file_obj,
+                            original_filename=doc.filename,
+                            document_type=doc.document_type,
+                        )
+                        
+                        # Create KYCDocument record
+                        kyc_doc = KYCDocument(
+                            application_id=application.id,
+                            document_type=doc.document_type,
+                            file_path=file_path,
+                            original_filename=doc.filename,
+                            mime_type="image/png",  # Default
+                        )
+                        session.add(kyc_doc)
+                        saved_docs.append(doc.filename)
+                        documents_uploaded += 1
+                    except Exception as e:
+                        logger.error(f"Failed to save document {doc.filename}: {e}")
                 
-                if application:
-                    # Save each document
-                    saved_docs = []
-                    for doc in request.documents:
-                        try:
-                            file_content = base64.b64decode(doc.data)
-                            file_path = await document_storage.save_document(
-                                application_id=application.id,
-                                file_content=file_content,
-                                original_filename=doc.filename,
-                            )
-                            
-                            # Create KYCDocument record
-                            kyc_doc = KYCDocument(
-                                application_id=application.id,
-                                document_type=doc.document_type,
-                                file_path=file_path,
-                                original_filename=doc.filename,
-                                mime_type="image/png",  # Default
-                            )
-                            session.add(kyc_doc)
-                            saved_docs.append(doc.filename)
-                            documents_uploaded += 1
-                        except Exception as e:
-                            logger.error(f"Failed to save document {doc.filename}: {e}")
+                if saved_docs:
+                    # Update application status
+                    application.status = "documents_uploaded"
+                    await session.commit()
                     
-                    if saved_docs:
-                        # Update application status
-                        application.status = "documents_uploaded"
-                        await session.commit()
-                        
-                        # Tell agent about uploads (without base64 data)
-                        doc_info = ", ".join(saved_docs)
-                        docs_message = f"The user has successfully uploaded {len(saved_docs)} document(s): {doc_info}. The documents are now saved and ready for processing. Please confirm the upload and ask if they want to proceed with verification."
-                        
-                        try:
-                            doc_result = call_agent_with_retry(agent, docs_message)
-                            if doc_result.message and doc_result.message.get("content"):
-                                for content_block in doc_result.message.get("content", []):
-                                    if isinstance(content_block, dict) and "text" in content_block:
-                                        response_text += "\n\n" + content_block["text"]
-                        except Exception as e:
-                            logger.warning(f"Agent call for document confirmation failed: {e}")
-                            response_text += f"\n\nI've successfully uploaded your {len(saved_docs)} document(s). Would you like me to proceed with the verification?"
-                else:
-                    response_text += "\n\nI couldn't find an active KYC application. Please start the KYC process first."
+                    # Tell agent about uploads (without base64 data)
+                    doc_info = ", ".join(saved_docs)
+                    docs_message = f"The user has successfully uploaded {len(saved_docs)} document(s): {doc_info}. The documents are now saved and ready for processing. Please confirm the upload and ask if they want to proceed with verification."
+                    
+                    try:
+                        doc_result = call_agent_with_retry(agent, docs_message)
+                        if doc_result.message and doc_result.message.get("content"):
+                            for content_block in doc_result.message.get("content", []):
+                                if isinstance(content_block, dict) and "text" in content_block:
+                                    response_text += "\n\n" + content_block["text"]
+                    except Exception as e:
+                        logger.warning(f"Agent call for document confirmation failed: {e}")
+                        response_text += f"\n\nI've successfully uploaded your {len(saved_docs)} document(s). Would you like me to proceed with the verification?"
             else:
-                response_text += "\n\nPlease provide your email or register first to upload documents."
+                response_text += "\n\nI couldn't find an active KYC application. Please start the KYC process first."
 
     # Persist agent state for next call
     # The agent.state contains user_id, application_id, etc. set by tools

@@ -9,9 +9,6 @@ import base64
 import logging
 from pathlib import Path
 
-from strands import Agent
-from strands.models.bedrock import BedrockModel
-
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -57,16 +54,6 @@ Be thorough and accurate. The extracted data will be used for identity verificat
 """
 
 
-def get_vision_model():
-    """Get a vision-capable LLM model."""
-    # Claude 3 Haiku supports vision
-    return BedrockModel(
-        model_id=settings.model_id,
-        region_name=settings.aws_region,
-        temperature=0.1,  # Low temperature for accurate extraction
-    )
-
-
 def encode_image_to_base64(file_path: str) -> str:
     """Encode a local image file to base64."""
     with open(file_path, "rb") as image_file:
@@ -85,24 +72,6 @@ def get_image_mime_type(file_path: str) -> str:
         ".pdf": "application/pdf",
     }
     return mime_types.get(ext, "image/jpeg")
-
-
-def create_ocr_agent() -> Agent:
-    """
-    Create an OCR agent for extracting text from identity documents.
-    
-    This agent uses the LLM's vision capabilities to perform OCR,
-    similar to crewAI's OCR tool approach.
-    
-    Returns:
-        Agent: Configured OCR agent with vision capabilities
-    """
-    return Agent(
-        model=get_vision_model(),
-        system_prompt=OCR_SYSTEM_PROMPT,
-        tools=[],  # No tools needed - pure vision task
-        callback_handler=None,
-    )
 
 
 def extract_document_data_with_vision(file_path: str, document_type: str = "id_card") -> dict:

@@ -1,79 +1,69 @@
 """KYC decision tool for making final approval/rejection decisions."""
 
-import asyncio
+from datetime import datetime, timezone
 
 from strands import tool
+from sqlalchemy import select
 
 from app.db.database import AsyncSessionLocal
 from app.db.models import KYCApplication, KYCStage, User
-from sqlalchemy import select
-from datetime import datetime, timezone
+from app.utils.async_helpers import run_sync
 
 
-def _sync_finalize_decision(application_id: str, decision: str, decision_reason: str) -> None:
-    """Synchronously update the application with the final decision."""
-    
-    async def _async_finalize():
-        async with AsyncSessionLocal() as session:
-            now = datetime.now(timezone.utc)
-            
-            # Get application
-            result = await session.execute(
-                select(KYCApplication).where(KYCApplication.id == application_id)
+async def _async_finalize_decision(application_id: str, decision: str, decision_reason: str) -> None:
+    """Async implementation to update the application with the final decision."""
+    async with AsyncSessionLocal() as session:
+        now = datetime.now(timezone.utc)
+        
+        # Get application
+        result = await session.execute(
+            select(KYCApplication).where(KYCApplication.id == application_id)
+        )
+        application = result.scalar_one_or_none()
+        
+        if not application:
+            return
+        
+        # Update application
+        application.current_stage = "decision_made"
+        application.decision = decision
+        application.decision_reason = decision_reason
+        application.status = "completed" if decision == "approved" else "failed"
+        application.updated_at = now
+        
+        # Create or update decision stage
+        stage_result = await session.execute(
+            select(KYCStage).where(
+                KYCStage.application_id == application_id,
+                KYCStage.stage_name == "decision_made",
             )
-            application = result.scalar_one_or_none()
-            
-            if not application:
-                return
-            
-            # Update application
-            application.current_stage = "decision_made"
-            application.decision = decision
-            application.decision_reason = decision_reason
-            application.status = "completed" if decision == "approved" else "failed"
-            application.updated_at = now
-            
-            # Create or update decision stage
-            stage_result = await session.execute(
-                select(KYCStage).where(
-                    KYCStage.application_id == application_id,
-                    KYCStage.stage_name == "decision_made",
-                )
+        )
+        existing_stage = stage_result.scalar_one_or_none()
+        
+        if existing_stage:
+            existing_stage.status = "completed"
+            existing_stage.result = {"decision": decision, "decision_reason": decision_reason}
+            existing_stage.completed_at = now
+        else:
+            new_stage = KYCStage(
+                application_id=application_id,
+                stage_name="decision_made",
+                status="completed",
+                result={"decision": decision, "decision_reason": decision_reason},
+                completed_at=now,
             )
-            existing_stage = stage_result.scalar_one_or_none()
-            
-            if existing_stage:
-                existing_stage.status = "completed"
-                existing_stage.result = {"decision": decision, "decision_reason": decision_reason}
-                existing_stage.completed_at = now
-            else:
-                new_stage = KYCStage(
-                    application_id=application_id,
-                    stage_name="decision_made",
-                    status="completed",
-                    result={"decision": decision, "decision_reason": decision_reason},
-                    completed_at=now,
-                )
-                session.add(new_stage)
-            
-            # Update user KYC status
-            user_result = await session.execute(
-                select(User).where(User.id == application.user_id)
-            )
-            user = user_result.scalar_one_or_none()
-            if user:
-                user.kyc_status = decision
-                user.updated_at = now
-            
-            await session.commit()
-    
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-    
-    loop.run_until_complete(_async_finalize())
+            session.add(new_stage)
+        
+        # Update user KYC status
+        user_result = await session.execute(
+            select(User).where(User.id == application.user_id)
+        )
+        user = user_result.scalar_one_or_none()
+        if user:
+            user.kyc_status = decision
+            user.updated_at = now
+        
+        await session.commit()
 
 
 @tool
@@ -190,7 +180,7 @@ def make_kyc_decision(
             ]
         
         # Finalize the decision in the database
-        _sync_finalize_decision(application_id, decision, decision_reason)
+        run_sync(_async_finalize_decision(application_id, decision, decision_reason))
         
         return {
             "success": True,
