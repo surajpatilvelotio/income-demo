@@ -744,13 +744,17 @@ def run_ocr_extraction(tool_context: ToolContext, application_id: str | None = N
     
     try:
         result = run_sync(_run_ocr())
-        # Update state
+        # Update state based on OCR result
         if result.get("success"):
             tool_context.agent.state.set("workflow_stage", "ocr_completed")
             if result.get("extracted_data"):
                 tool_context.agent.state.set("extracted_data", result["extracted_data"])
+        else:
+            # OCR failed - set appropriate workflow stage
+            tool_context.agent.state.set("workflow_stage", "ocr_failed")
         return result
     except Exception as e:
+        tool_context.agent.state.set("workflow_stage", "ocr_failed")
         return {"success": False, "error": str(e)}
 
 

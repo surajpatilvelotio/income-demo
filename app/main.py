@@ -77,8 +77,8 @@ async def health():
     return {
         "status": "healthy",
         "service": "income-demo",
-        "version": "0.2.0",
-        "database": "sqlite",
+        "version": "0.1.0",
+        "database": "postgresql",
         "features": {
             "chat": True,
             "user_signup": True,

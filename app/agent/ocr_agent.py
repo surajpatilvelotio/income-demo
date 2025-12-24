@@ -1,8 +1,5 @@
 """
 LLM-based OCR Agent for extracting text from identity documents.
-
-Based on crewAI's OCR tool approach:
-https://github.com/crewAIInc/crewAI/blob/main/lib/crewai-tools/src/crewai_tools/tools/ocr_tool/ocr_tool.py
 """
 
 import base64

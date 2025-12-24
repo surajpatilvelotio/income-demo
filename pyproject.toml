@@ -10,7 +10,7 @@ dependencies = [
     "pydantic-settings",
     "sse-starlette",
     "sqlalchemy",
-    "aiosqlite",
+    "asyncpg",
     "python-multipart",
     "email-validator",
     "httpx",

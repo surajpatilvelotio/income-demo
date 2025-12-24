@@ -12,10 +12,12 @@ class Base(DeclarativeBase):
     pass
 
 
-# Create async engine for SQLite
+# Create async engine for PostgreSQL
 engine = create_async_engine(
     settings.database_url,
     echo=settings.database_echo,
+    pool_size=5,
+    max_overflow=10,
 )
 
 # Create async session factory

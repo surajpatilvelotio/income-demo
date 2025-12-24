@@ -6,8 +6,6 @@ Workflow Steps:
 2. User Review: User confirms extracted data
 3. KYC Agent: Government DB validation → Fraud detection → Decision
 
-Based on Strands SDK workflow patterns:
-https://strandsagents.com/latest/documentation/docs/user-guide/concepts/multi-agent/workflow/
 """
 
 import asyncio
@@ -120,19 +118,70 @@ class KYCWorkflow:
         
         # Filter out None results (failed OCR)
         all_extracted_data = [r for r in results if r is not None]
+        failed_count = len(documents) - len(all_extracted_data)
         logger.info(f"   Completed: {len(all_extracted_data)}/{len(documents)} documents processed")
         
-        # Update stage
+        # Identify failed documents
+        failed_documents = []
+        for i, (doc, result) in enumerate(zip(documents, results)):
+            if result is None:
+                failed_documents.append(doc.get("original_filename", f"document_{i}"))
+        
+        # Check if OCR failed for all documents
+        if not all_extracted_data:
+            logger.error(f"   ❌ OCR failed for all {len(documents)} document(s)")
+            
+            # Update stage as failed
+            update_kyc_stage(
+                application_id=self.application_id,
+                stage_name="ocr_processing",
+                status="failed",
+                result_data={
+                    "error": "Failed to extract data from documents",
+                    "documents_attempted": len(documents),
+                    "failed_documents": failed_documents,
+                },
+            )
+            
+            # Update application status
+            async with AsyncSessionLocal() as session:
+                result = await session.execute(
+                    select(KYCApplication).where(KYCApplication.id == self.application_id)
+                )
+                application = result.scalar_one_or_none()
+                if application:
+                    application.current_stage = "ocr_failed"
+                    await session.commit()
+            
+            return {
+                "success": False,
+                "status": KYCWorkflowStatus.FAILED,
+                "error": "Failed to extract data from documents. Please upload clearer images.",
+                "documents_attempted": len(documents),
+                "documents_processed": 0,
+                "failed_documents": failed_documents,
+            }
+        
+        # Check for partial failure
+        is_partial_success = failed_count > 0
+        if is_partial_success:
+            logger.warning(f"   ⚠️ Partial OCR: {failed_count} document(s) failed: {', '.join(failed_documents)}")
+        
+        # Update stage - partial_success or completed
+        stage_status = "partial_success" if is_partial_success else "completed"
         update_kyc_stage(
             application_id=self.application_id,
             stage_name="ocr_processing",
-            status="completed",
-            result_data={"documents_processed": len(all_extracted_data)},
+            status=stage_status,
+            result_data={
+                "documents_processed": len(all_extracted_data),
+                "documents_failed": failed_count,
+                "failed_documents": failed_documents if failed_documents else None,
+            },
         )
         
         # Store combined data (use first document as primary)
-        if all_extracted_data:
-            self.extracted_data = all_extracted_data[0].get("extracted_data", {})
+        self.extracted_data = all_extracted_data[0].get("extracted_data", {})
         
         # Update application with extracted data
         async with AsyncSessionLocal() as session:
@@ -145,7 +194,8 @@ class KYCWorkflow:
                 application.current_stage = "pending_user_review"
                 await session.commit()
         
-        return {
+        # Build response with partial failure info if applicable
+        response = {
             "success": True,
             "status": KYCWorkflowStatus.PENDING_USER_REVIEW,
             "message": "Document data extracted successfully. Please review the information.",
@@ -153,7 +203,22 @@ class KYCWorkflow:
             "extracted_data_for_review": all_extracted_data,
             "requires_user_action": True,
             "next_action": "confirm_extracted_data",
+            "documents_processed": len(all_extracted_data),
+            "documents_attempted": len(documents),
         }
+        
+        # Add partial failure info if some documents failed
+        if is_partial_success:
+            response["partial_success"] = True
+            response["documents_failed"] = failed_count
+            response["failed_documents"] = failed_documents
+            response["message"] = (
+                f"Extracted data from {len(all_extracted_data)} of {len(documents)} documents. "
+                f"Failed: {', '.join(failed_documents)}. "
+                "Please review the extracted information and consider re-uploading failed documents."
+            )
+        
+        return response
     
     async def confirm_user_data(self, confirmed: bool = True, corrections: dict | None = None) -> dict:
         """

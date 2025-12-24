@@ -1048,13 +1048,25 @@ async def kyc_chat_stream(request: ChatRequest):
         request: Chat request with message, optional session_id, user_id/user_email, and documents
 
     Returns:
-        EventSourceResponse: Streaming SSE response
+        EventSourceResponse: Streaming SSE response with events:
+        - session: Session ID
+        - text: Streamed text content
+        - tool_call: Tool invocation
+        - tool_result: Tool result
+        - document_uploaded: Document upload success
+        - kyc_progress: Current KYC stages
+        - stop: Stream end
     """
+    from app.agent.state_store import state_store as stream_state_store
+    from app.api.schemas import KYCProgressInfo, KYCStageInfo
+    import io
+    
     session_id = request.session_id or f"kyc-chat-{uuid.uuid4()}"
 
-    # Build initial state from request context
-    # See: https://strandsagents.com/latest/documentation/docs/user-guide/concepts/agents/state/
-    initial_state = {}
+    # Load persisted state and merge with request context
+    persisted_state = stream_state_store.load(session_id)
+    
+    initial_state = {**persisted_state}
     if request.user_id:
         initial_state["user_id"] = request.user_id
     if request.user_email:
@@ -1100,16 +1112,88 @@ Look up user by email using find_user_by_email, then proceed with KYC."""
         message_with_context = f"{instructions}\n\nUser message: {request.message}"
 
     async def generate():
+        documents_uploaded = 0
+        
         # Send session_id as first event
         yield {"event": "session", "data": json.dumps({"session_id": session_id})}
 
-        # Stream the main message response (with user context if provided)
-        async for event in agent.stream_async(message_with_context):
+        # Handle document uploads FIRST (save to disk, not pass to agent)
+        if request.documents:
+            # Load state to get application_id
+            user_id = request.user_id or initial_state.get("user_id")
+            application_id = request.application_id or initial_state.get("application_id")
+            
+            async with AsyncSessionLocal() as session:
+                application = None
+                
+                # Find application by ID or user
+                if application_id:
+                    result = await session.execute(
+                        select(KYCApplication).where(KYCApplication.id == application_id)
+                    )
+                    application = result.scalar_one_or_none()
+                
+                if not application and user_id:
+                    result = await session.execute(
+                        select(KYCApplication)
+                        .where(KYCApplication.user_id == user_id)
+                        .where(KYCApplication.status.in_(["initiated", "documents_uploaded"]))
+                        .order_by(KYCApplication.created_at.desc())
+                    )
+                    application = result.scalar_one_or_none()
+                
+                if application:
+                    saved_docs = []
+                    for doc in request.documents:
+                        try:
+                            import base64
+                            file_content = base64.b64decode(doc.data)
+                            file_obj = io.BytesIO(file_content)
+                            file_path, _ = document_storage.save_document(
+                                application_id=application.id,
+                                file=file_obj,
+                                original_filename=doc.filename,
+                                document_type=doc.document_type,
+                            )
+                            
+                            kyc_doc = KYCDocument(
+                                application_id=application.id,
+                                document_type=doc.document_type,
+                                file_path=file_path,
+                                original_filename=doc.filename,
+                                mime_type="image/png",
+                            )
+                            session.add(kyc_doc)
+                            saved_docs.append(doc.filename)
+                            documents_uploaded += 1
+                            
+                            yield {
+                                "event": "document_uploaded",
+                                "data": json.dumps({"filename": doc.filename, "success": True})
+                            }
+                        except Exception as e:
+                            logger.error(f"Failed to save document {doc.filename}: {e}")
+                            yield {
+                                "event": "document_uploaded",
+                                "data": json.dumps({"filename": doc.filename, "success": False, "error": str(e)})
+                            }
+                    
+                    if saved_docs:
+                        application.status = "documents_uploaded"
+                        await session.commit()
+                        
+                        # Add upload context to message
+                        message_with_context_updated = f"{message_with_context}\n\n[SYSTEM: User has uploaded {len(saved_docs)} document(s): {', '.join(saved_docs)}. Documents saved successfully.]"
+                else:
+                    message_with_context_updated = message_with_context
+        else:
+            message_with_context_updated = message_with_context
+
+        # Stream the main message response
+        async for event in agent.stream_async(message_with_context_updated if request.documents else message_with_context):
             if "data" in event:
-                # Text content
                 yield {"event": "text", "data": json.dumps({"text": event["data"]})}
             elif "tool_use" in event:
-                # Tool being called
                 tool_info = event.get("tool_use", {})
                 yield {
                     "event": "tool_call",
@@ -1119,9 +1203,7 @@ Look up user by email using find_user_by_email, then proceed with KYC."""
                     })
                 }
             elif "tool_result" in event:
-                # Tool result
                 result = event.get("tool_result", {})
-                # Only send success status, not full result (could be large)
                 yield {
                     "event": "tool_result",
                     "data": json.dumps({
@@ -1132,26 +1214,321 @@ Look up user by email using find_user_by_email, then proceed with KYC."""
             elif "stop_reason" in event:
                 yield {"event": "stop", "data": json.dumps({"reason": event.get("stop_reason")})}
         
-        # Handle document uploads if provided
-        if request.documents:
-            doc_info = []
-            for doc in request.documents:
-                doc_info.append(f"- {doc.document_type}: {doc.filename}")
-            
-            docs_message = f"""
-The user has attached {len(request.documents)} document(s) for upload:
-{chr(10).join(doc_info)}
+        # Persist agent state
+        if agent.state:
+            current_state = agent.state.get() if hasattr(agent.state, 'get') and callable(agent.state.get) else {}
+            if isinstance(current_state, dict) and current_state:
+                stream_state_store.save(session_id, current_state)
+                app_id = current_state.get("application_id")
+        
+                # Send final KYC progress
+                if app_id:
+                    async with AsyncSessionLocal() as session:
+                        result = await session.execute(
+                            select(KYCApplication)
+                            .where(KYCApplication.id == app_id)
+                            .options(selectinload(KYCApplication.stages))
+                        )
+                        application = result.scalar_one_or_none()
+                        
+                        if application:
+                            stages = [
+                                {
+                                    "stage_name": stage.stage_name,
+                                    "status": stage.status,
+                                    "result": stage.result,
+                                }
+                                for stage in application.stages
+                            ]
+                            yield {
+                                "event": "kyc_progress",
+                                "data": json.dumps({
+                                    "application_id": application.id,
+                                    "status": application.status,
+                                    "current_stage": application.current_stage,
+                                    "stages": stages,
+                                })
+                            }
 
-Document data (base64):
-{chr(10).join([f'{doc.document_type}|{doc.filename}|{doc.data}' for doc in request.documents])}
+    return EventSourceResponse(generate())
 
-Please upload these documents using the upload_kyc_document tool.
-"""
-            yield {"data": json.dumps({"text": "\n\nProcessing document uploads..."})}
+
+@router.post("/chat/stream/upload")
+async def kyc_chat_stream_form(
+    message: str = Form(...),
+    session_id: str | None = Form(None),
+    user_id: str | None = Form(None),
+    user_email: str | None = Form(None),
+    application_id: str | None = Form(None),
+    documents: list[UploadFile] = File(default=[]),
+    document_types: str | None = Form(None),  # Comma-separated: "id_card,passport" or JSON array
+):
+    """
+    Streaming KYC chat endpoint with form-data file upload.
+    
+    This endpoint accepts multipart/form-data for direct file uploads
+    without base64 encoding. Use this for better performance with large files.
+    
+    Args:
+        message: The chat message
+        session_id: Optional session ID for conversation continuity
+        user_id: Optional user ID (for users from UI signup)
+        user_email: Optional user email
+        application_id: Optional existing KYC application ID
+        documents: List of files to upload (max 3)
+        document_types: Comma-separated document types matching each file
+                       e.g., "id_card,passport" or JSON: ["id_card", "passport"]
+                       Defaults to "id_card" for all files if not provided
+    
+    Returns:
+        EventSourceResponse: Streaming SSE response with events:
+        - session: Session ID
+        - text: Streamed text content
+        - tool_call: Tool invocation
+        - tool_result: Tool result
+        - document_uploaded: Document upload success
+        - kyc_progress: Current KYC stages
+        - stop: Stream end
+    
+    Example curl:
+        curl -X POST "http://localhost:8000/kyc/chat/stream/upload" \\
+          -F "message=Start my KYC" \\
+          -F "session_id=my-session" \\
+          -F "user_id=abc-123" \\
+          -F "documents=@/path/to/id.png" \\
+          -F "documents=@/path/to/passport.png" \\
+          -F "document_types=id_card,passport"
+    """
+    from app.agent.state_store import state_store as form_state_store
+    import io
+    import mimetypes
+    
+    effective_session_id = session_id or f"kyc-chat-{uuid.uuid4()}"
+    
+    # Parse document types
+    doc_types_list = []
+    if document_types:
+        # Try JSON array first
+        try:
+            doc_types_list = json.loads(document_types)
+        except json.JSONDecodeError:
+            # Fallback to comma-separated
+            doc_types_list = [t.strip() for t in document_types.split(",")]
+    
+    # Load persisted state and merge with request context
+    persisted_state = form_state_store.load(effective_session_id)
+    
+    initial_state = {**persisted_state}
+    if user_id:
+        initial_state["user_id"] = user_id
+    if user_email:
+        initial_state["user_email"] = user_email
+    if application_id:
+        initial_state["application_id"] = application_id
+    
+    agent = create_agent(
+        effective_session_id,
+        include_kyc_tools=True,
+        initial_state=initial_state if initial_state else None,
+    )
+    
+    # Build the message with user context if provided
+    message_with_context = message
+    context_parts = []
+    
+    if user_id:
+        context_parts.append(f"user_id: {user_id}")
+    if user_email:
+        context_parts.append(f"user_email: {user_email}")
+    if application_id:
+        context_parts.append(f"application_id: {application_id}")
+    
+    if context_parts:
+        context_str = ", ".join(context_parts)
+        
+        if application_id:
+            instructions = f"""[SYSTEM CONTEXT: {context_str}]
+This user has an active KYC application. Use application_id directly for uploads, processing, and status."""
+        elif user_id:
+            instructions = f"""[SYSTEM CONTEXT: {context_str}]
+IMPORTANT: This user just clicked "Initiate KYC" from the UI.
+ACTION REQUIRED: 
+1. FIRST call initiate_kyc_process(user_id="{user_id}") to start their KYC
+2. Remember the application_id from the response
+3. Then guide them to upload documents
+Do NOT ask them to register - they already have an account."""
+        else:
+            instructions = f"""[SYSTEM CONTEXT: {context_str}]
+Look up user by email using find_user_by_email, then proceed with KYC."""
+        
+        message_with_context = f"{instructions}\n\nUser message: {message}"
+
+    async def generate():
+        documents_uploaded = 0
+        
+        # Send session_id as first event
+        yield {"event": "session", "data": json.dumps({"session_id": effective_session_id})}
+
+        # Handle file uploads FIRST
+        message_with_uploads = message_with_context
+        if documents:
+            # Limit to 3 documents
+            docs_to_process = documents[:3]
+            if len(documents) > 3:
+                yield {
+                    "event": "warning",
+                    "data": json.dumps({"message": f"Only first 3 of {len(documents)} documents will be processed"})
+                }
             
-            async for event in agent.stream_async(docs_message):
-                if "data" in event:
-                    yield {"data": json.dumps({"text": event["data"]})}
+            # Get application_id from state
+            effective_user_id = user_id or initial_state.get("user_id")
+            effective_app_id = application_id or initial_state.get("application_id")
+            
+            async with AsyncSessionLocal() as session:
+                application = None
+                
+                # Find application by ID or user
+                if effective_app_id:
+                    result = await session.execute(
+                        select(KYCApplication).where(KYCApplication.id == effective_app_id)
+                    )
+                    application = result.scalar_one_or_none()
+                
+                if not application and effective_user_id:
+                    result = await session.execute(
+                        select(KYCApplication)
+                        .where(KYCApplication.user_id == effective_user_id)
+                        .where(KYCApplication.status.in_(["initiated", "documents_uploaded"]))
+                        .order_by(KYCApplication.created_at.desc())
+                    )
+                    application = result.scalar_one_or_none()
+                
+                if application:
+                    saved_docs = []
+                    for i, doc_file in enumerate(docs_to_process):
+                        try:
+                            # Get document type
+                            doc_type = doc_types_list[i] if i < len(doc_types_list) else "id_card"
+                            
+                            # Read file content
+                            file_content = await doc_file.read()
+                            file_obj = io.BytesIO(file_content)
+                            
+                            # Get mime type
+                            mime_type = doc_file.content_type or mimetypes.guess_type(doc_file.filename)[0] or "image/png"
+                            
+                            # Save document
+                            file_path, _ = document_storage.save_document(
+                                application_id=application.id,
+                                file=file_obj,
+                                original_filename=doc_file.filename,
+                                document_type=doc_type,
+                            )
+                            
+                            # Create DB record
+                            kyc_doc = KYCDocument(
+                                application_id=application.id,
+                                document_type=doc_type,
+                                file_path=file_path,
+                                original_filename=doc_file.filename,
+                                mime_type=mime_type,
+                            )
+                            session.add(kyc_doc)
+                            saved_docs.append(doc_file.filename)
+                            documents_uploaded += 1
+                            
+                            yield {
+                                "event": "document_uploaded",
+                                "data": json.dumps({
+                                    "filename": doc_file.filename,
+                                    "document_type": doc_type,
+                                    "success": True
+                                })
+                            }
+                        except Exception as e:
+                            logger.error(f"Failed to save document {doc_file.filename}: {e}")
+                            yield {
+                                "event": "document_uploaded",
+                                "data": json.dumps({
+                                    "filename": doc_file.filename,
+                                    "success": False,
+                                    "error": str(e)
+                                })
+                            }
+                    
+                    if saved_docs:
+                        application.status = "documents_uploaded"
+                        await session.commit()
+                        
+                        # Add upload context to message
+                        message_with_uploads = f"{message_with_context}\n\n[SYSTEM: User has uploaded {len(saved_docs)} document(s): {', '.join(saved_docs)}. Documents saved successfully.]"
+                else:
+                    yield {
+                        "event": "warning",
+                        "data": json.dumps({"message": "No active KYC application found. Please start KYC first."})
+                    }
+
+        # Stream the main message response
+        async for event in agent.stream_async(message_with_uploads):
+            if "data" in event:
+                yield {"event": "text", "data": json.dumps({"text": event["data"]})}
+            elif "tool_use" in event:
+                tool_info = event.get("tool_use", {})
+                yield {
+                    "event": "tool_call",
+                    "data": json.dumps({
+                        "tool_name": tool_info.get("name"),
+                        "tool_id": tool_info.get("id"),
+                    })
+                }
+            elif "tool_result" in event:
+                result = event.get("tool_result", {})
+                yield {
+                    "event": "tool_result",
+                    "data": json.dumps({
+                        "tool_id": result.get("tool_use_id"),
+                        "success": result.get("content", {}).get("success", True) if isinstance(result.get("content"), dict) else True,
+                    })
+                }
+            elif "stop_reason" in event:
+                yield {"event": "stop", "data": json.dumps({"reason": event.get("stop_reason")})}
+        
+        # Persist agent state
+        if agent.state:
+            current_state = agent.state.get() if hasattr(agent.state, 'get') and callable(agent.state.get) else {}
+            if isinstance(current_state, dict) and current_state:
+                form_state_store.save(effective_session_id, current_state)
+                app_id = current_state.get("application_id")
+        
+                # Send final KYC progress
+                if app_id:
+                    async with AsyncSessionLocal() as session:
+                        result = await session.execute(
+                            select(KYCApplication)
+                            .where(KYCApplication.id == app_id)
+                            .options(selectinload(KYCApplication.stages))
+                        )
+                        application = result.scalar_one_or_none()
+                        
+                        if application:
+                            stages = [
+                                {
+                                    "stage_name": stage.stage_name,
+                                    "status": stage.status,
+                                    "result": stage.result,
+                                }
+                                for stage in application.stages
+                            ]
+                            yield {
+                                "event": "kyc_progress",
+                                "data": json.dumps({
+                                    "application_id": application.id,
+                                    "status": application.status,
+                                    "current_stage": application.current_stage,
+                                    "stages": stages,
+                                    "documents_uploaded": documents_uploaded,
+                                })
+                            }
 
     return EventSourceResponse(generate())
 
