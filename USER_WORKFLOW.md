@@ -54,7 +54,7 @@ Registration via REST, everything else through streaming chat with real-time SSE
 
 ```
 ┌─────────────────┐     ┌──────────────────────────────────────────────────────────────┐
-│   Registration  │     │           /kyc/chat/stream/upload (SSE Stream)               │
+│   Registration  │     │   Agent Workflow /kyc/chat/stream/upload (SSE Stream)        │
 │                 │     │                                                              │
 │  /users/signup  │ ──▶ │  Start KYC → Upload Docs → OCR → Confirm → Verify → Result  │
 │                 │     │                                                              │
