@@ -189,7 +189,7 @@ async def signup(
     )
     
     db.add(user)
-    await db.flush()
+    await db.commit()
     await db.refresh(user)
     
     # Generate JWT token

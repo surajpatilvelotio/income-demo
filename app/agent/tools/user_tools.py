@@ -11,11 +11,11 @@ from datetime import datetime, timezone
 
 from strands import tool
 from strands.types.tools import ToolContext
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
 
 from app.db.database import AsyncSessionLocal
-from app.db.models import User, KYCApplication, KYCDocument, KYCStage
+from app.db.models import User, KYCApplication, KYCDocument, KYCStage, generate_member_id
 from app.services.password import hash_password
 from app.config import settings
 from app.utils.async_helpers import run_sync
@@ -52,12 +52,21 @@ def register_user(email: str, phone: str, password: str, tool_context: ToolConte
                     "error": "Email already registered. Please use a different email or login.",
                 }
             
+            # Generate auto_id and member_id (same as REST API signup)
+            max_id_result = await session.execute(
+                select(func.max(User.auto_id))
+            )
+            max_id = max_id_result.scalar() or 0
+            next_auto_id = max_id + 1
+            
             # Create user
             user = User(
                 email=email,
                 phone=phone,
                 password_hash=hash_password(password),
                 kyc_status="pending",
+                auto_id=next_auto_id,
+                member_id=generate_member_id(next_auto_id),
             )
             session.add(user)
             await session.commit()
@@ -533,21 +542,27 @@ def upload_kyc_document(
                 }
             
             # Determine file extension and mime type
+            # Note: PDF is not supported - Bedrock vision API only accepts images
             ext = Path(filename).suffix.lower() if filename else ".jpg"
-            if ext not in [".jpg", ".jpeg", ".png", ".pdf", ".webp"]:
+            if ext == ".pdf":
+                return {
+                    "success": False,
+                    "error": "PDF files are not supported. Please upload an image file (JPEG, PNG, GIF, or WebP).",
+                }
+            if ext not in [".jpg", ".jpeg", ".png", ".gif", ".webp"]:
                 ext = ".jpg"
             
             mime_types = {
                 ".jpg": "image/jpeg",
                 ".jpeg": "image/jpeg",
                 ".png": "image/png",
-                ".pdf": "application/pdf",
+                ".gif": "image/gif",
                 ".webp": "image/webp",
             }
             mime_type = mime_types.get(ext, "image/jpeg")
             
             # Create upload directory
-            upload_dir = Path(settings.upload_dir) / application_id
+            upload_dir = Path(settings.upload_dir) / effective_app_id
             upload_dir.mkdir(parents=True, exist_ok=True)
             
             # Preserve original filename with unique suffix
@@ -563,7 +578,7 @@ def upload_kyc_document(
             
             # Create document record
             document = KYCDocument(
-                application_id=application_id,
+                application_id=effective_app_id,
                 document_type=document_type,
                 file_path=str(file_path),
                 original_filename=filename or unique_filename,
@@ -825,8 +840,8 @@ def confirm_and_verify(tool_context: ToolContext, user_confirmed: bool = True, c
         # Set extracted data in workflow
         workflow.extracted_data = extracted_data
         
-        # Confirm data
-        await workflow.confirm_user_data(extracted_data)
+        # Confirm data (auto-confirm since data was already set above)
+        await workflow.confirm_user_data(confirmed=True)
         
         # Run verification
         verification_result = await workflow.run_full_verification()

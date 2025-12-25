@@ -48,7 +48,7 @@ async def _async_update_stage(
                 existing_stage.result = result
             if status == "in_progress" and not existing_stage.started_at:
                 existing_stage.started_at = now
-            if status in ["completed", "failed"]:
+            if status in ["completed", "failed", "partial_success"]:
                 existing_stage.completed_at = now
         else:
             # Create new stage
@@ -58,7 +58,7 @@ async def _async_update_stage(
                 status=status,
                 result=result,
                 started_at=now if status == "in_progress" else None,
-                completed_at=now if status in ["completed", "failed"] else None,
+                completed_at=now if status in ["completed", "failed", "partial_success"] else None,
             )
             session.add(new_stage)
         
@@ -134,6 +134,7 @@ def update_kyc_stage(
     - pending: Stage not yet started
     - in_progress: Stage is currently being processed
     - completed: Stage completed successfully
+    - partial_success: Stage completed with partial success (e.g., some documents processed)
     - failed: Stage failed
     
     Args:
@@ -169,7 +170,7 @@ def update_kyc_stage(
             }
         
         # Validate status
-        valid_statuses = ["pending", "in_progress", "completed", "failed"]
+        valid_statuses = ["pending", "in_progress", "completed", "partial_success", "failed"]
         if status not in valid_statuses:
             return {
                 "success": False,

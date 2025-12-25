@@ -58,7 +58,11 @@ def encode_image_to_base64(file_path: str) -> str:
 
 
 def get_image_mime_type(file_path: str) -> str:
-    """Determine MIME type from file extension."""
+    """Determine MIME type from file extension.
+    
+    Note: Only image formats supported by Bedrock vision API are included.
+    PDF is not supported.
+    """
     ext = Path(file_path).suffix.lower()
     mime_types = {
         ".jpg": "image/jpeg",
@@ -66,7 +70,6 @@ def get_image_mime_type(file_path: str) -> str:
         ".png": "image/png",
         ".gif": "image/gif",
         ".webp": "image/webp",
-        ".pdf": "application/pdf",
     }
     return mime_types.get(ext, "image/jpeg")
 
@@ -98,6 +101,15 @@ def extract_document_data_with_vision(file_path: str, document_type: str = "id_c
         # Encode image to base64
         base64_image = encode_image_to_base64(file_path)
         mime_type = get_image_mime_type(file_path)
+        
+        # Validate supported image formats for Bedrock vision API
+        # Bedrock only supports: jpeg, png, gif, webp
+        supported_formats = ["image/jpeg", "image/png", "image/gif", "image/webp"]
+        if mime_type not in supported_formats:
+            return {
+                "success": False,
+                "error": f"Unsupported file format: {mime_type}. Bedrock vision API only supports JPEG, PNG, GIF, and WebP images. PDF files are not supported.",
+            }
         
         # Use boto3 bedrock-runtime directly for vision
         client = boto3.client(
