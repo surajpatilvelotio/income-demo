@@ -132,6 +132,9 @@ Environment variables (see `.env.example`):
 | `TEMPERATURE` | Model temperature (0.0-1.0) | `0.7` |
 | `SESSION_STORAGE_DIR` | Session storage directory | `./sessions` |
 | `USE_REAL_OCR` | Use real OCR vs mock | `true` |
+| `JWT_SECRET_KEY` | Secret key for JWT tokens | (required) |
+| `JWT_ALGORITHM` | JWT signing algorithm | `HS256` |
+| `JWT_EXPIRE_MINUTES` | Token expiration time | `10080` (7 days) |
 
 ## Best Practices
 

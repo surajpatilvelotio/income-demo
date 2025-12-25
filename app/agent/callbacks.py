@@ -55,7 +55,7 @@ class AgentEventCallback:
                 self.events.append(event)
                 
                 if self.verbose:
-                    logger.info(f"🔧 [Tool Call] {tool_name}")
+                    logger.info(f"[Tool Call] {tool_name}")
                     if tool_input:
                         # Log key parameters (not full data)
                         safe_input = {k: v for k, v in tool_input.items() if k != "document_data" and k != "data"}
@@ -88,7 +88,7 @@ class AgentEventCallback:
             self.events.append(event)
             
             if self.verbose:
-                status = "✅" if success else "❌"
+                status = "[OK]" if success else "[FAIL]"
                 logger.info(f"{status} [Tool Result] {tool_name}: {'Success' if success else 'Failed'}")
         
         # Text chunk - accumulate for full response
@@ -116,7 +116,7 @@ class AgentEventCallback:
                     preview = self._current_response[:500]
                     if len(self._current_response) > 500:
                         preview += "..."
-                    logger.info(f"💬 [Assistant Response]\n{preview}")
+                    logger.info(f"[Assistant Response]\n{preview}")
                 
                 # Reset for next response
                 self._current_response = ""
@@ -133,7 +133,7 @@ class AgentEventCallback:
             self.events.append(event)
             
             if self.verbose and reason not in ("end_turn",):
-                logger.info(f"🛑 [Stop] Reason: {reason}")
+                logger.info(f"[Stop] Reason: {reason}")
     
     def get_events(self) -> list[dict]:
         """Return all captured events."""

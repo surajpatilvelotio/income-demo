@@ -10,7 +10,7 @@ This document describes the complete user journey from account registration to K
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
 │   Registration  │ ──▶│  KYC Initiation │ ──▶ │ Document Upload │ ──▶│  OCR Extraction │
 │                 │     │                 │     │                 │     │                 │
-│  /users/signup  │     │  /kyc/initiate  │     │  /kyc/documents │     │   (automatic)   │
+│  /auth/signup   │     │  /kyc/initiate  │     │  /kyc/documents │     │   (automatic)   │
 └─────────────────┘     └─────────────────┘     └─────────────────┘     └─────────────────┘
                                                                                │
                                                                                ▼
@@ -43,21 +43,21 @@ This document describes the complete user journey from account registration to K
 
 | Use Case | Endpoints | Description |
 |----------|-----------|-------------|
-| **Streaming Chat (Recommended)** | `/users/signup` → `/kyc/chat/stream/upload` | Real-time SSE, direct file upload, agent-guided |
-| **REST APIs only** | `/users/signup` → `/kyc/initiate` → `/kyc/documents` → `/kyc/process` | Direct API calls, predictable responses |
+| **Streaming Chat (Recommended)** | `/auth/signup` → `/kyc/chat/stream/upload` | Real-time SSE, direct file upload, agent-guided |
+| **REST APIs only** | `/auth/signup` → `/kyc/initiate` → `/kyc/documents` → `/kyc/process` | Direct API calls, predictable responses |
 
 ---
 
 ## Flow 1: Streaming Chat with File Upload (Recommended)
 
-Registration via REST, everything else through streaming chat with real-time SSE events.
+Registration via REST with JWT authentication, everything else through streaming chat with real-time SSE events.
 
 ```
 ┌─────────────────┐     ┌──────────────────────────────────────────────────────────────┐
 │   Registration  │     │   Agent Workflow /kyc/chat/stream/upload (SSE Stream)        │
 │                 │     │                                                              │
-│  /users/signup  │ ──▶ │  Start KYC → Upload Docs → OCR → Confirm → Verify → Result  │
-│                 │     │                                                              │
+│  /auth/signup   │ ──▶ │  Start KYC → Upload Docs → OCR → Confirm → Verify → Result  │
+│  (JWT + Member) │     │                                                              │
 └─────────────────┘     └──────────────────────────────────────────────────────────────┘
                                               │
                                               ▼
@@ -71,14 +71,21 @@ Registration via REST, everything else through streaming chat with real-time SSE
 ### Step 1: Register User
 
 ```bash
-curl --location 'http://127.0.0.1:8000/users/signup' \
+curl --location 'http://127.0.0.1:8000/auth/signup' \
 --header 'Content-Type: application/json' \
 --data-raw '{
     "email": "<your_email>",
+    "password": "<your_password>",
+    "firstName": "<first_name>",
+    "lastName": "<last_name>",
     "phone": "<your_phone>",
-    "password": "<your_password>"
+    "dateOfBirth": "<YYYY-MM-DD>"
   }'
 ```
+
+**Response includes:**
+- `user.memberId` - Auto-generated member ID (e.g., `INS2025001`)
+- `token` - JWT token for authenticated requests
 
 ### Step 2: Start KYC
 
@@ -121,9 +128,27 @@ For direct API integration without conversational UI.
 ### Step 1: Register User
 
 ```bash
-curl -X POST http://127.0.0.1:8000/users/signup \
+curl -X POST http://127.0.0.1:8000/auth/signup \
   -H "Content-Type: application/json" \
-  -d '{"email": "<email>", "phone": "<phone>", "password": "<password>"}'
+  -d '{
+    "email": "<email>",
+    "password": "<password>",
+    "firstName": "<first_name>",
+    "lastName": "<last_name>",
+    "phone": "<phone>",
+    "dateOfBirth": "<YYYY-MM-DD>"
+  }'
+```
+
+**Note:** Save the `token` from response for authenticated requests.
+
+### Step 1b: Login (Returning Users)
+
+```bash
+# Login with Member ID or Email
+curl -X POST http://127.0.0.1:8000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"identifier": "<member_id_or_email>", "password": "<password>"}'
 ```
 
 ### Step 2: Initiate KYC
@@ -165,11 +190,19 @@ curl http://127.0.0.1:8000/kyc/application/<application_id>
 
 ## API Endpoints Reference
 
-### User Management
+### Authentication
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
-| `/users/signup` | POST | Create user account |
-| `/users/{user_id}` | GET | Get user details |
+| `/auth/signup` | POST | Register new user (returns JWT + member_id) |
+| `/auth/login` | POST | Login by member ID or email |
+| `/auth/logout` | POST | Logout (invalidate session) |
+| `/auth/me` | GET | Get current authenticated user |
+
+### User Management (Admin)
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/users/{user_id}` | GET | Get user details by ID |
+| `/users/` | GET | List all users (paginated) |
 
 ### KYC REST API
 | Endpoint | Method | Purpose |

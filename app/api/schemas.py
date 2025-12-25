@@ -90,8 +90,11 @@ class UserSignupRequest(BaseModel):
     """Request model for user signup."""
 
     email: EmailStr = Field(..., description="User email address")
-    phone: str | None = Field(None, description="User phone number")
     password: str = Field(..., min_length=8, description="User password (min 8 characters)")
+    firstName: str = Field(..., description="User first name")
+    lastName: str = Field(..., description="User last name")
+    phone: str | None = Field(None, description="User phone number")
+    dateOfBirth: str | None = Field(None, description="User date of birth (YYYY-MM-DD)")
 
 
 class UserResponse(BaseModel):
@@ -105,6 +108,48 @@ class UserResponse(BaseModel):
     created_at: datetime = Field(..., description="Account creation timestamp")
 
     model_config = {"from_attributes": True}
+
+
+class AuthUserResponse(BaseModel):
+    """Extended user response for auth endpoints matching frontend User type."""
+
+    id: str = Field(..., description="User ID")
+    memberId: str = Field(..., description="Member ID (e.g., INS2025001)")
+    email: str = Field(..., description="User email address")
+    firstName: str = Field(..., description="User first name")
+    lastName: str = Field(..., description="User last name")
+    phone: str = Field(..., description="User phone number")
+    dateOfBirth: str = Field(..., description="User date of birth")
+    kycStatus: str = Field(..., description="KYC status: pending, verified, rejected")
+    createdAt: str = Field(..., description="Account creation timestamp (ISO format)")
+    updatedAt: str = Field(..., description="Last update timestamp (ISO format)")
+
+    model_config = {"from_attributes": True}
+
+
+# ============================================
+# Auth Schemas
+# ============================================
+
+class LoginRequest(BaseModel):
+    """Request model for user login."""
+
+    identifier: str = Field(..., description="Member ID (e.g., INS2025001) or email address")
+    password: str = Field(..., description="User password")
+
+
+class LoginResponse(BaseModel):
+    """Response model for login."""
+
+    user: AuthUserResponse = Field(..., description="Authenticated user data")
+    token: str = Field(..., description="JWT access token")
+
+
+class SignupResponse(BaseModel):
+    """Response model for signup."""
+
+    user: AuthUserResponse = Field(..., description="Created user data")
+    token: str = Field(..., description="JWT access token")
 
 
 # ============================================

@@ -29,5 +29,10 @@ class Settings(BaseSettings):
     # Set to False to use mock OCR data (for testing without API calls)
     use_real_ocr: bool = True
 
+    # JWT Configuration
+    jwt_secret_key: str = "your-super-secret-key-change-in-production"
+    jwt_algorithm: str = "HS256"
+    jwt_expire_minutes: int = 60 * 24 * 7  # 7 days
+
 
 settings = Settings()

@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, String, Text, JSON
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, String, Text, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.database import Base
@@ -20,17 +20,37 @@ def generate_uuid() -> str:
     return str(uuid.uuid4())
 
 
+def generate_member_id(auto_id: int) -> str:
+    """
+    Generate a member ID with format INS<year><padded_id>.
+    
+    Args:
+        auto_id: The auto-increment ID of the user
+        
+    Returns:
+        Member ID string like INS2025001, INS2025012, INS2025123
+    """
+    current_year = datetime.now().year
+    # Pad the ID to at least 3 digits
+    padded_id = str(auto_id).zfill(3)
+    return f"INS{current_year}{padded_id}"
+
+
 class User(Base):
     """User model for signup and authentication."""
 
     __tablename__ = "users"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    auto_id: Mapped[int] = mapped_column(Integer, autoincrement=True, unique=True, nullable=False)
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     phone: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    first_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    last_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    date_of_birth: Mapped[Optional[datetime]] = mapped_column(Date, nullable=True)
     kyc_status: Mapped[str] = mapped_column(String(20), default="pending")
-    member_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+    member_id: Mapped[Optional[str]] = mapped_column(String(20), unique=True, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 

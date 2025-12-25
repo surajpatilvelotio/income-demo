@@ -341,6 +341,7 @@ async def get_status_stream(application_id: str):
         poll_count = 0
         max_polls = 300  # 5 minutes max at 1 second intervals
         initial_sent = False
+        last_current_stage = None  # Track current_stage changes for real-time updates
 
         while poll_count < max_polls:
             async with AsyncSessionLocal() as session:
@@ -385,10 +386,34 @@ async def get_status_stream(application_id: str):
                     }
                     initial_sent = True
                     last_stage_count = len(current_stages)
+                    last_current_stage = application.current_stage
 
-                # Send new stage updates
+                # Get current stages
                 current_stages = sorted(application.stages, key=lambda s: s.created_at)
                 
+                # Check if current_stage changed (important for real-time UI updates)
+                if initial_sent and application.current_stage != last_current_stage:
+                    stages_data = [
+                        {
+                            "stage_name": s.stage_name,
+                            "status": s.status,
+                            "message": _get_stage_message(s.stage_name, s.status),
+                            "result": s.result,
+                        }
+                        for s in current_stages
+                    ]
+                    yield {
+                        "event": "init",
+                        "data": json.dumps({
+                            "application_id": application.id,
+                            "status": application.status,
+                            "current_stage": application.current_stage,
+                            "stages": stages_data,
+                        }),
+                    }
+                    last_current_stage = application.current_stage
+                
+                # Send new stage updates
                 if len(current_stages) > last_stage_count:
                     for stage in current_stages[last_stage_count:]:
                         event_data = KYCStatusEvent(
@@ -1481,6 +1506,43 @@ Look up user by email using find_user_by_email, then proceed with KYC."""
                         "tool_id": tool_info.get("id"),
                     })
                 }
+                
+                # Send kyc_progress when a tool starts to show "in_progress" in UI
+                tool_app_id = None
+                if agent.state:
+                    tool_state = agent.state.get() if hasattr(agent.state, 'get') and callable(agent.state.get) else {}
+                    if isinstance(tool_state, dict):
+                        tool_app_id = tool_state.get("application_id")
+                
+                if tool_app_id:
+                    async with AsyncSessionLocal() as progress_session:
+                        progress_result = await progress_session.execute(
+                            select(KYCApplication)
+                            .where(KYCApplication.id == tool_app_id)
+                            .options(selectinload(KYCApplication.stages))
+                        )
+                        progress_app = progress_result.scalar_one_or_none()
+                        
+                        if progress_app:
+                            progress_stages = [
+                                {
+                                    "stage_name": stage.stage_name,
+                                    "status": stage.status,
+                                    "result": stage.result,
+                                }
+                                for stage in progress_app.stages
+                            ]
+                            yield {
+                                "event": "kyc_progress",
+                                "data": json.dumps({
+                                    "application_id": progress_app.id,
+                                    "status": progress_app.status,
+                                    "current_stage": progress_app.current_stage,
+                                    "stages": progress_stages,
+                                    "documents_uploaded": documents_uploaded,
+                                })
+                            }
+                            
             elif "tool_result" in event:
                 result = event.get("tool_result", {})
                 yield {
@@ -1490,6 +1552,43 @@ Look up user by email using find_user_by_email, then proceed with KYC."""
                         "success": result.get("content", {}).get("success", True) if isinstance(result.get("content"), dict) else True,
                     })
                 }
+                
+                # Send kyc_progress after each tool result to update UI in real-time
+                tool_app_id = None
+                if agent.state:
+                    current_tool_state = agent.state.get() if hasattr(agent.state, 'get') and callable(agent.state.get) else {}
+                    if isinstance(current_tool_state, dict):
+                        tool_app_id = current_tool_state.get("application_id")
+                
+                if tool_app_id:
+                    async with AsyncSessionLocal() as progress_session:
+                        progress_result = await progress_session.execute(
+                            select(KYCApplication)
+                            .where(KYCApplication.id == tool_app_id)
+                            .options(selectinload(KYCApplication.stages))
+                        )
+                        progress_app = progress_result.scalar_one_or_none()
+                        
+                        if progress_app:
+                            progress_stages = [
+                                {
+                                    "stage_name": stage.stage_name,
+                                    "status": stage.status,
+                                    "result": stage.result,
+                                }
+                                for stage in progress_app.stages
+                            ]
+                            yield {
+                                "event": "kyc_progress",
+                                "data": json.dumps({
+                                    "application_id": progress_app.id,
+                                    "status": progress_app.status,
+                                    "current_stage": progress_app.current_stage,
+                                    "stages": progress_stages,
+                                    "documents_uploaded": documents_uploaded,
+                                })
+                            }
+                            
             elif "stop_reason" in event:
                 yield {"event": "stop", "data": json.dumps({"reason": event.get("stop_reason")})}
         

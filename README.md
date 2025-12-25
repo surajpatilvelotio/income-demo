@@ -47,12 +47,21 @@ API available at: http://localhost:8000/docs
 
 ## API Endpoints
 
-### User Management
+### Authentication
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/users/signup` | POST | Register new user |
-| `/users/{user_id}` | GET | Get user details |
+| `/auth/signup` | POST | Register new user (returns JWT token + member_id) |
+| `/auth/login` | POST | Login by member ID or email |
+| `/auth/logout` | POST | Logout (invalidate session) |
+| `/auth/me` | GET | Get current authenticated user |
+
+### User Management (Admin)
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/users/{user_id}` | GET | Get user details by ID |
+| `/users/` | GET | List all users (paginated) |
 
 ### KYC Endpoints
 
@@ -72,25 +81,57 @@ API available at: http://localhost:8000/docs
 
 ## Curl Examples
 
-### 1. User Registration
+### 1. User Registration (Signup)
 
 ```bash
-curl --location 'http://127.0.0.1:8000/users/signup' \
+curl --location 'http://127.0.0.1:8000/auth/signup' \
 --header 'Content-Type: application/json' \
 --data-raw '{
     "email": "<your_email>",
-    "phone": "<your_phone>",
+    "password": "<your_password>",
+    "firstName": "<first_name>",
+    "lastName": "<last_name>",
+    "phone": "<phone_number>",
+    "dateOfBirth": "<YYYY-MM-DD>"
+  }'
+```
+
+**Response:** Returns user data with auto-generated `memberId` (e.g., `INS2025001`) and JWT token.
+
+### 2. Login (by Member ID or Email)
+
+```bash
+# Login with Member ID
+curl --location 'http://127.0.0.1:8000/auth/login' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+    "identifier": "<member_id>",
+    "password": "<your_password>"
+  }'
+
+# Login with Email
+curl --location 'http://127.0.0.1:8000/auth/login' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+    "identifier": "<your_email>",
     "password": "<your_password>"
   }'
 ```
 
-### 2. Check KYC Status (SSE Stream)
+### 3. Get Current User (Authenticated)
+
+```bash
+curl --location 'http://127.0.0.1:8000/auth/me' \
+--header 'Authorization: Bearer <your_jwt_token>'
+```
+
+### 4. Check KYC Status (SSE Stream)
 
 ```bash
 curl --location 'http://127.0.0.1:8000/kyc/status/<application_id>'
 ```
 
-### 3. Start KYC via Chat (Form-data)
+### 5. Start KYC via Chat (Form-data)
 
 ```bash
 curl --location 'http://127.0.0.1:8000/kyc/chat/stream/upload' \
@@ -99,7 +140,7 @@ curl --location 'http://127.0.0.1:8000/kyc/chat/stream/upload' \
 --form 'user_id="<user_id>"'
 ```
 
-### 4. Upload Document via Chat (Form-data)
+### 6. Upload Document via Chat (Form-data)
 
 ```bash
 curl --location 'http://127.0.0.1:8000/kyc/chat/stream/upload' \
@@ -108,7 +149,7 @@ curl --location 'http://127.0.0.1:8000/kyc/chat/stream/upload' \
 --form 'documents=@"<path_to_document>"'
 ```
 
-### 5. Confirm & Complete KYC
+### 7. Confirm & Complete KYC
 
 ```bash
 curl --location 'http://127.0.0.1:8000/kyc/chat/stream/upload' \
@@ -126,8 +167,11 @@ curl --location 'http://127.0.0.1:8000/kyc/chat/stream/upload' \
 | `AWS_ACCESS_KEY_ID` | AWS access key | - |
 | `AWS_SECRET_ACCESS_KEY` | AWS secret key | - |
 | `MODEL_ID` | Bedrock model identifier | Claude 3 Haiku |
-| `DATABASE_URL` | Database connection string | SQLite |
+| `DATABASE_URL` | Database connection string | PostgreSQL |
 | `USE_REAL_OCR` | Use real OCR vs mock | `true` |
+| `JWT_SECRET_KEY` | Secret key for JWT tokens | (required) |
+| `JWT_ALGORITHM` | JWT signing algorithm | `HS256` |
+| `JWT_EXPIRE_MINUTES` | Token expiration time | `10080` (7 days) |
 
 ---
 

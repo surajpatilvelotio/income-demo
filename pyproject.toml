@@ -14,6 +14,7 @@ dependencies = [
     "python-multipart",
     "email-validator",
     "httpx",
+    "python-jose[cryptography]",
 ]
 
 [dependency-groups]
