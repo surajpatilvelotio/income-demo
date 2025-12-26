@@ -1,4 +1,4 @@
-.PHONY: dev fmt lint typecheck install docker-up docker-down docker-build docker-logs docker-clean docker-restart
+.PHONY: dev fmt lint typecheck install docker-up docker-down docker-build docker-logs docker-clean docker-restart docker-backend docker-frontend
 
 # Local development
 install:
@@ -16,7 +16,7 @@ lint:
 typecheck:
 	uv run pyrefly check app
 
-# Docker commands
+# Docker commands - Full Stack (backend + frontend + db)
 docker-build:
 	docker-compose build
 
@@ -36,3 +36,23 @@ docker-restart:
 	docker-compose down
 	docker-compose up --build -d
 
+# Docker commands - Backend only (for development)
+docker-backend:
+	docker-compose up --build -d db backend
+
+docker-backend-logs:
+	docker-compose logs -f backend
+
+# Docker commands - Frontend only
+docker-frontend:
+	docker-compose up --build -d frontend
+
+docker-frontend-logs:
+	docker-compose logs -f frontend
+
+# Build individual services
+docker-build-backend:
+	docker-compose build backend
+
+docker-build-frontend:
+	docker-compose build frontend

@@ -7,7 +7,7 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: ekyc
     ports:
-      - "5432:5432"
+      - "5433:5432"  # External 5433 to avoid conflict with local PostgreSQL
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -16,9 +16,11 @@ services:
       timeout: 5s
       retries: 5
 
-  app:
-    build: .
-    container_name: ekyc-app
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ekyc-backend
     ports:
       - "8000:8000"
     environment:
@@ -37,6 +39,24 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  frontend:
+    build:
+      context: ${UI_PATH:-../../../UI/insure-agents-ui}
+      dockerfile: Dockerfile
+    container_name: ekyc-frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
 
 volumes:
   postgres_data:
