@@ -5,7 +5,7 @@ install:
 	uv sync
 
 dev:
-	uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
+	uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
 fmt:
 	uv run ruff format app

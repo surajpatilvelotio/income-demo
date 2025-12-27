@@ -21,7 +21,8 @@ from app.config import settings
 from app.utils.async_helpers import run_sync
 
 
-MAX_DOCUMENTS_PER_APPLICATION = 3
+# Limit per request (not per application - users can upload more over multiple requests)
+MAX_DOCUMENTS_PER_REQUEST = 3
 
 
 @tool(context=True)
@@ -465,7 +466,7 @@ def upload_kyc_document(
     
     Use this tool when a user wants to upload their identity document.
     The document should be provided as base64-encoded data.
-    Maximum 3 documents allowed per application.
+    Maximum 3 documents per request (no total limit per application).
     Uses application_id from agent state if not provided.
     
     Args:
@@ -507,14 +508,7 @@ def upload_kyc_document(
                     "error": f"Cannot upload documents - application already {application.status}.",
                 }
             
-            # Check document limit
-            current_count = len(application.documents)
-            if current_count >= MAX_DOCUMENTS_PER_APPLICATION:
-                return {
-                    "success": False,
-                    "error": f"Maximum {MAX_DOCUMENTS_PER_APPLICATION} documents allowed. You already have {current_count} documents uploaded.",
-                    "documents_uploaded": current_count,
-                }
+            # Note: No total limit per application. Limit is per-request (handled in API endpoint).
             
             # Validate document type
             valid_types = ["id_card", "passport"]
@@ -680,7 +674,7 @@ def get_uploaded_documents(tool_context: ToolContext, application_id: str | None
 
 
 @tool(context=True)
-def run_ocr_extraction(tool_context: ToolContext, application_id: str | None = None) -> dict:
+def run_ocr_extraction(tool_context: ToolContext, application_id: str | None = None, document_ids: str | None = None) -> dict:
     """
     Run OCR extraction on uploaded documents and return data for user review.
     
@@ -688,8 +682,13 @@ def run_ocr_extraction(tool_context: ToolContext, application_id: str | None = N
     information from the documents and presents it for the user to review
     and confirm before verification.
     
+    IMPORTANT: If document_ids is provided, ONLY those documents will be processed.
+    This is the preferred approach when documents were just uploaded in the current request.
+    
     Args:
         application_id: The KYC application ID (optional, uses state if not provided)
+        document_ids: Comma-separated list of document IDs to process (optional, 
+                     if not provided, processes ALL documents in the application)
         
     Returns:
         Dictionary with extracted data for user review
@@ -703,6 +702,11 @@ def run_ocr_extraction(tool_context: ToolContext, application_id: str | None = N
             "success": False,
             "error": "No application_id provided or found in session. Please initiate KYC first.",
         }
+    
+    # Parse document_ids if provided
+    target_doc_ids = None
+    if document_ids:
+        target_doc_ids = [doc_id.strip() for doc_id in document_ids.split(",") if doc_id.strip()]
     
     async def _run_ocr():
         async with AsyncSessionLocal() as session:
@@ -726,14 +730,25 @@ def run_ocr_extraction(tool_context: ToolContext, application_id: str | None = N
                     "error": f"Application already processed. Status: {application.status}, Decision: {application.decision}",
                 }
             
+            # Filter documents if specific IDs were provided
+            if target_doc_ids:
+                # Only process documents with matching IDs (current request documents)
+                filtered_docs = [doc for doc in application.documents if doc.id in target_doc_ids]
+                if not filtered_docs:
+                    return {"success": False, "error": f"No documents found with the specified IDs: {document_ids}"}
+            else:
+                # Process all documents (legacy behavior)
+                filtered_docs = application.documents
+            
             # Prepare documents for workflow
             documents = [
                 {
                     "file_path": doc.file_path,
                     "document_type": doc.document_type,
                     "original_filename": doc.original_filename,
+                    "document_id": doc.id,
                 }
-                for doc in application.documents
+                for doc in filtered_docs
             ]
             
             # Run OCR workflow step
@@ -746,14 +761,19 @@ def run_ocr_extraction(tool_context: ToolContext, application_id: str | None = N
                     "error": ocr_result.get("error", "OCR extraction failed"),
                 }
             
-            # Get extracted data for review
+            # Get extracted data for review - this is an array with each document's data
             extracted_data = ocr_result.get("extracted_data_for_review", [])
+            
+            # Also get the merged data for display
+            merged_data = ocr_result.get("merged_data", {})
             
             return {
                 "success": True,
                 "status": "pending_user_review",
-                "message": "I've extracted the following information from your document. Please review and confirm if it's correct:",
-                "extracted_data": extracted_data,
+                "message": "I've extracted the following information from your documents. Please review and confirm if it's correct:",
+                "extracted_data": extracted_data,  # Array of per-document data
+                "merged_data": merged_data,  # Single merged object for display
+                "documents_processed": len(extracted_data),
                 "next_step": "Please confirm if this information is correct, or let me know what needs to be corrected.",
             }
     

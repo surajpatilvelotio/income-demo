@@ -181,10 +181,17 @@ class KYCWorkflow:
             },
         )
         
-        # Store combined data (use first document as primary)
-        self.extracted_data = all_extracted_data[0].get("extracted_data", {})
+        # Merge data from all documents (later documents override earlier ones)
+        # Keep track of both merged data AND individual document data
+        self.extracted_data = {}
+        for doc_result in all_extracted_data:
+            doc_data = doc_result.get("extracted_data", {})
+            # Merge - later documents can override earlier ones for same fields
+            for key, value in doc_data.items():
+                if value:  # Only override if value is not empty
+                    self.extracted_data[key] = value
         
-        # Update application with extracted data
+        # Update application with merged extracted data
         async with AsyncSessionLocal() as session:
             result = await session.execute(
                 select(KYCApplication).where(KYCApplication.id == self.application_id)
@@ -195,13 +202,14 @@ class KYCWorkflow:
                 application.current_stage = "pending_user_review"
                 await session.commit()
         
-        # Build response with partial failure info if applicable
+        # Build response with both merged and individual document data
         response = {
             "success": True,
             "status": KYCWorkflowStatus.PENDING_USER_REVIEW,
             "message": "Document data extracted successfully. Please review the information.",
-            "extracted_data": all_extracted_data,
-            "extracted_data_for_review": all_extracted_data,
+            "extracted_data": all_extracted_data,  # Array of per-document data
+            "extracted_data_for_review": all_extracted_data,  # Same array for backwards compatibility
+            "merged_data": self.extracted_data,  # Single merged object for confirmation/verification
             "requires_user_action": True,
             "next_action": "confirm_extracted_data",
             "documents_processed": len(all_extracted_data),

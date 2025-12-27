@@ -1485,8 +1485,12 @@ Look up user by email using find_user_by_email, then proceed with KYC."""
                         application.status = "documents_uploaded"
                         await session.commit()
                         
-                        # Add upload context to message
-                        message_with_uploads = f"{message_with_context}\n\n[SYSTEM: User has uploaded {len(saved_docs)} document(s): {', '.join(saved_docs)}. Documents saved successfully.]"
+                        # Get the IDs of documents just uploaded (most recent N documents)
+                        await session.refresh(application, ['documents'])
+                        recent_doc_ids = [doc.id for doc in application.documents[-len(saved_docs):]]
+                        
+                        # Add upload context to message with document IDs for OCR
+                        message_with_uploads = f"{message_with_context}\n\n[SYSTEM: User has uploaded {len(saved_docs)} document(s): {', '.join(saved_docs)}. Document IDs: {','.join(recent_doc_ids)}. Call run_ocr_extraction with document_ids parameter to process ONLY these documents.]"
                 else:
                     yield {
                         "event": "warning",
