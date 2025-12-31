@@ -17,12 +17,19 @@ def check_fraud_indicators(
     ocr_confidence: float = 1.0,
     government_verified: bool = False,
     government_verification_status: str = "unknown",
+    # Passport data for cross-validation (optional, for non-local users)
+    passport_data: dict | None = None,
+    # Visa data for cross-validation (optional, for non-local users)
+    visa_data: dict | None = None,
+    # Visa verification status
+    visa_verified: bool | None = None,
 ) -> dict:
     """
     Check for fraud indicators in the KYC application.
     
     This tool analyzes various factors to detect potential fraud patterns,
     including document validity, data consistency, and known fraud indicators.
+    For non-local users, it also cross-validates passport and visa data.
     
     Args:
         document_number: The document ID number
@@ -35,6 +42,9 @@ def check_fraud_indicators(
         ocr_confidence: Confidence score from OCR extraction (0.0 to 1.0)
         government_verified: Whether government verification passed
         government_verification_status: Status from government verification
+        passport_data: Passport extracted data for cross-validation (optional)
+        visa_data: Visa extracted data for cross-validation (optional)
+        visa_verified: Whether visa was verified in government DB (optional)
         
     Returns:
         Dictionary containing:
@@ -177,6 +187,73 @@ def check_fraud_indicators(
                 "message": "Last name appears suspicious",
             })
             risk_score += 0.2
+        
+        # Check 7: Visa verification status (for non-local users)
+        if visa_verified is not None and not visa_verified:
+            fraud_indicators.append({
+                "type": "visa_not_verified",
+                "severity": "high",
+                "message": "Visa could not be verified in immigration database",
+            })
+            risk_score += 0.4
+        
+        # Check 8: Cross-validate passport and visa data (for non-local users)
+        if passport_data and visa_data:
+            # Cross-validate names
+            passport_first = (passport_data.get("first_name") or "").lower().strip()
+            passport_last = (passport_data.get("last_name") or "").lower().strip()
+            visa_first = (visa_data.get("first_name") or "").lower().strip()
+            visa_last = (visa_data.get("last_name") or "").lower().strip()
+            
+            if passport_first and visa_first and passport_first != visa_first:
+                fraud_indicators.append({
+                    "type": "name_mismatch_passport_visa",
+                    "severity": "high",
+                    "message": f"First name mismatch: passport '{passport_data.get('first_name')}' vs visa '{visa_data.get('first_name')}'",
+                })
+                risk_score += 0.3
+            
+            if passport_last and visa_last and passport_last != visa_last:
+                fraud_indicators.append({
+                    "type": "name_mismatch_passport_visa",
+                    "severity": "high",
+                    "message": f"Last name mismatch: passport '{passport_data.get('last_name')}' vs visa '{visa_data.get('last_name')}'",
+                })
+                risk_score += 0.3
+            
+            # Cross-validate DOB
+            passport_dob = passport_data.get("date_of_birth", "")
+            visa_dob = visa_data.get("date_of_birth", "")
+            if passport_dob and visa_dob and passport_dob != visa_dob:
+                fraud_indicators.append({
+                    "type": "dob_mismatch_passport_visa",
+                    "severity": "high",
+                    "message": f"Date of birth mismatch: passport '{passport_dob}' vs visa '{visa_dob}'",
+                })
+                risk_score += 0.3
+            
+            # Cross-validate passport number on visa matches actual passport
+            visa_passport_num = (visa_data.get("passport_number") or visa_data.get("document_number") or "").upper().strip()
+            # Use passport_number field (document-specific ID)
+            passport_num = (passport_data.get("passport_number") or "").upper().strip()
+            if visa_passport_num and passport_num and visa_passport_num != passport_num:
+                fraud_indicators.append({
+                    "type": "passport_number_mismatch",
+                    "severity": "critical",
+                    "message": f"Passport number on visa '{visa_passport_num}' does not match actual passport '{passport_num}'",
+                })
+                risk_score += 0.5
+            
+            # Cross-validate nationality
+            passport_nationality = (passport_data.get("nationality") or "").upper().strip()
+            visa_nationality = (visa_data.get("nationality") or "").upper().strip()
+            if passport_nationality and visa_nationality and passport_nationality != visa_nationality:
+                fraud_indicators.append({
+                    "type": "nationality_mismatch",
+                    "severity": "medium",
+                    "message": f"Nationality mismatch: passport '{passport_nationality}' vs visa '{visa_nationality}'",
+                })
+                risk_score += 0.2
         
         # Normalize risk score
         risk_score = min(1.0, risk_score)

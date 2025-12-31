@@ -867,39 +867,13 @@ async def kyc_chat(request: ChatRequest) -> ChatResponse:
         initial_state=initial_state if initial_state else None,
     )
     
-    # Build the message with user context if provided
+    # Build the message - IDs are in agent state, no need to expose them
+    # Tools auto-read from state: tool_context.agent.state.get("user_id")
     message_with_context = request.message
-    context_parts = []
     
-    # Add user context
-    if request.user_id:
-        context_parts.append(f"user_id: {request.user_id}")
-    if request.user_email:
-        context_parts.append(f"user_email: {request.user_email}")
-    if request.application_id:
-        context_parts.append(f"application_id: {request.application_id}")
-    
-    # If any context provided, add system message
-    if context_parts:
-        context_str = ", ".join(context_parts)
-        
-        # Different instructions based on what's provided
-        if request.application_id:
-            instructions = f"""[SYSTEM CONTEXT: {context_str}]
-This user has an active KYC application. Use application_id directly for uploads, processing, and status."""
-        elif request.user_id:
-            instructions = f"""[SYSTEM CONTEXT: {context_str}]
-IMPORTANT: This user just clicked "Initiate KYC" from the UI.
-ACTION REQUIRED: 
-1. FIRST call initiate_kyc_process(user_id="{request.user_id}") to start their KYC
-2. Remember the application_id from the response
-3. Then guide them to upload documents
-Do NOT ask them to register - they already have an account."""
-        else:
-            instructions = f"""[SYSTEM CONTEXT: {context_str}]
-Look up user by email using find_user_by_email, then proceed with KYC."""
-        
-        message_with_context = f"{instructions}\n\nUser message: {request.message}"
+    # Only add simple hint for email lookup case
+    if not request.user_id and request.user_email:
+        message_with_context = f"{request.message}\n\n[Hint: Look up user by email first]"
     
     # First, run the agent to process the message (with retry for file locking)
     # This may create user/application which we need for document uploads
@@ -1105,36 +1079,13 @@ async def kyc_chat_stream(request: ChatRequest):
         initial_state=initial_state if initial_state else None,
     )
     
-    # Build the message with user context if provided
+    # Build the message - IDs are in agent state, no need to expose them
+    # Tools auto-read from state: tool_context.agent.state.get("user_id")
     message_with_context = request.message
-    context_parts = []
     
-    if request.user_id:
-        context_parts.append(f"user_id: {request.user_id}")
-    if request.user_email:
-        context_parts.append(f"user_email: {request.user_email}")
-    if request.application_id:
-        context_parts.append(f"application_id: {request.application_id}")
-    
-    if context_parts:
-        context_str = ", ".join(context_parts)
-        
-        if request.application_id:
-            instructions = f"""[SYSTEM CONTEXT: {context_str}]
-This user has an active KYC application. Use application_id directly for uploads, processing, and status."""
-        elif request.user_id:
-            instructions = f"""[SYSTEM CONTEXT: {context_str}]
-IMPORTANT: This user just clicked "Initiate KYC" from the UI.
-ACTION REQUIRED: 
-1. FIRST call initiate_kyc_process(user_id="{request.user_id}") to start their KYC
-2. Remember the application_id from the response
-3. Then guide them to upload documents
-Do NOT ask them to register - they already have an account."""
-        else:
-            instructions = f"""[SYSTEM CONTEXT: {context_str}]
-Look up user by email using find_user_by_email, then proceed with KYC."""
-        
-        message_with_context = f"{instructions}\n\nUser message: {request.message}"
+    # Only add simple hint for email lookup case
+    if not request.user_id and request.user_email:
+        message_with_context = f"{request.message}\n\n[Hint: Look up user by email first]"
 
     async def generate():
         documents_uploaded = 0
@@ -1357,36 +1308,21 @@ async def kyc_chat_stream_form(
         initial_state=initial_state if initial_state else None,
     )
     
-    # Build the message with user context if provided
+    # Build the message - IDs are in agent state, no need to expose them
+    # Tools auto-read from state: tool_context.agent.state.get("user_id")
     message_with_context = message
-    context_parts = []
     
-    if user_id:
-        context_parts.append(f"user_id: {user_id}")
-    if user_email:
-        context_parts.append(f"user_email: {user_email}")
-    if application_id:
-        context_parts.append(f"application_id: {application_id}")
-    
-    if context_parts:
-        context_str = ", ".join(context_parts)
-        
+    # Only add simple action hints (no IDs) for first message
+    if message.lower().strip() in ["start my kyc verification", "start kyc", "begin verification"]:
         if application_id:
-            instructions = f"""[SYSTEM CONTEXT: {context_str}]
-This user has an active KYC application. Use application_id directly for uploads, processing, and status."""
+            # User has active application - just continue
+            message_with_context = message
         elif user_id:
-            instructions = f"""[SYSTEM CONTEXT: {context_str}]
-IMPORTANT: This user just clicked "Initiate KYC" from the UI.
-ACTION REQUIRED: 
-1. FIRST call initiate_kyc_process(user_id="{user_id}") to start their KYC
-2. Remember the application_id from the response
-3. Then guide them to upload documents
-Do NOT ask them to register - they already have an account."""
-        else:
-            instructions = f"""[SYSTEM CONTEXT: {context_str}]
-Look up user by email using find_user_by_email, then proceed with KYC."""
-        
-        message_with_context = f"{instructions}\n\nUser message: {message}"
+            # New KYC - agent will call initiate_kyc_process (reads user_id from state)
+            message_with_context = message
+        elif user_email:
+            # Need to look up user first
+            message_with_context = f"{message}\n\n[Hint: Look up user by email first, then start KYC]"
 
     async def generate():
         documents_uploaded = 0

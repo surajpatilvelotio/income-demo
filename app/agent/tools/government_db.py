@@ -1,5 +1,6 @@
 """Government database verification tool."""
 
+import logging
 from strands import tool
 from sqlalchemy import select
 
@@ -7,9 +8,17 @@ from app.db.database import AsyncSessionLocal
 from app.db.models import MockGovernmentRecord
 from app.utils.async_helpers import run_sync
 
+logger = logging.getLogger(__name__)
+
 
 async def _async_verify(document_number: str, document_type: str, first_name: str, last_name: str, date_of_birth: str) -> dict:
     """Async implementation for database verification."""
+    logger.info("🏛️ [Gov Verification] Starting verification...")
+    logger.info(f"   📄 Document Type: {document_type}")
+    logger.info(f"   🔢 Document Number: {document_number}")
+    logger.info(f"   👤 Name: {first_name} {last_name}")
+    logger.info(f"   📅 DOB: {date_of_birth}")
+    
     async with AsyncSessionLocal() as session:
         # Query mock government database
         result = await session.execute(
@@ -20,6 +29,7 @@ async def _async_verify(document_number: str, document_type: str, first_name: st
         record = result.scalar_one_or_none()
         
         if not record:
+            logger.warning(f"   ❌ Result: NOT FOUND - No record for document {document_number}")
             return {
                 "success": True,
                 "verified": False,
@@ -31,8 +41,11 @@ async def _async_verify(document_number: str, document_type: str, first_name: st
                 },
             }
         
+        logger.info(f"   📋 Found gov record: {record.first_name} {record.last_name}, DOB: {record.date_of_birth}")
+        
         # Check if document is valid
         if not record.is_valid:
+            logger.warning(f"   ❌ Result: INVALID - {record.flag_reason or 'Unknown reason'}")
             return {
                 "success": True,
                 "verified": False,
@@ -46,6 +59,7 @@ async def _async_verify(document_number: str, document_type: str, first_name: st
         
         # Check if document is flagged
         if record.is_flagged:
+            logger.warning(f"   ❌ Result: FLAGGED - {record.flag_reason}")
             return {
                 "success": True,
                 "verified": False,
@@ -78,7 +92,10 @@ async def _async_verify(document_number: str, document_type: str, first_name: st
         if not type_match:
             mismatches.append(f"Document type mismatch: expected {record.document_type}")
         
+        logger.info(f"   🔍 Comparison: Name match={name_match}, DOB match={dob_match}, Type match={type_match}")
+        
         if mismatches:
+            logger.warning(f"   ❌ Result: MISMATCH - {', '.join(mismatches)}")
             return {
                 "success": True,
                 "verified": False,
@@ -91,6 +108,7 @@ async def _async_verify(document_number: str, document_type: str, first_name: st
             }
         
         # All checks passed
+        logger.info(f"   ✅ Result: VERIFIED - All checks passed!")
         return {
             "success": True,
             "verified": True,
@@ -159,3 +177,122 @@ def verify_with_government(
             },
         }
 
+
+@tool
+def verify_visa_with_government(
+    visa_number: str,
+    visa_type: str,
+    passport_number: str,
+    first_name: str,
+    last_name: str,
+    date_of_birth: str,
+    nationality: str,
+) -> dict:
+    """
+    Verify visa/work permit against immigration database.
+    
+    This is a mock verification for demo purposes. In production, this would
+    query the actual immigration/visa database.
+    
+    Args:
+        visa_number: The visa/work permit number
+        visa_type: Type of visa (e.g., 'Employment Pass', 'Work Permit')
+        passport_number: Passport number linked to the visa
+        first_name: First name on the visa
+        last_name: Last name on the visa
+        date_of_birth: Date of birth
+        nationality: Nationality of the visa holder
+        
+    Returns:
+        Dictionary containing:
+        - success: Whether the verification was successful
+        - verified: Whether the visa is valid
+        - verification_status: Status of verification
+        - message: Human-readable result
+        - details: Additional verification details
+    """
+    from datetime import datetime, date
+    
+    logger.info("🛂 [Visa Verification] Starting verification...")
+    logger.info(f"   📄 Visa Type: {visa_type}")
+    logger.info(f"   🔢 Visa Number: {visa_number}")
+    logger.info(f"   🛂 Passport Number: {passport_number}")
+    logger.info(f"   👤 Name: {first_name} {last_name}")
+    logger.info(f"   📅 DOB: {date_of_birth}")
+    logger.info(f"   🌍 Nationality: {nationality}")
+    
+    # Mock visa verification logic
+    # In production, this would query an actual immigration database
+    
+    # Check for mock test cases
+    visa_lower = visa_number.lower() if visa_number else ""
+    
+    # Valid visa patterns (for demo)
+    valid_visa_patterns = [
+        "visa-sg-2024",
+        "ep-",
+        "wp-",  
+        "dp-",  
+        "cj"
+    ]
+    
+    # Check if visa number follows a valid pattern
+    is_valid_pattern = any(pattern in visa_lower for pattern in valid_visa_patterns)
+    
+    # Mock expired visa check
+    if "expired" in visa_lower:
+        logger.warning(f"   ❌ Result: EXPIRED - Visa has expired")
+        return {
+            "success": True,
+            "verified": False,
+            "verification_status": "expired",
+            "message": "Visa has expired. Please renew your visa.",
+            "details": {
+                "visa_number": visa_number,
+                "status": "expired",
+            },
+        }
+    
+    # Mock revoked visa check
+    if "revoked" in visa_lower or "cancelled" in visa_lower:
+        logger.warning(f"   ❌ Result: REVOKED - Visa has been revoked/cancelled")
+        return {
+            "success": True,
+            "verified": False,
+            "verification_status": "revoked",
+            "message": "Visa has been revoked or cancelled.",
+            "details": {
+                "visa_number": visa_number,
+                "status": "revoked",
+            },
+        }
+    
+    # For demo purposes, accept visa numbers that match patterns
+    if is_valid_pattern or visa_number:  # Accept any non-empty visa number for demo
+        logger.info(f"   ✅ Result: VERIFIED - Visa is valid and active")
+        return {
+            "success": True,
+            "verified": True,
+            "verification_status": "verified",
+            "message": "Visa successfully verified against immigration database",
+            "details": {
+                "visa_number": visa_number,
+                "visa_type": visa_type,
+                "passport_number": passport_number,
+                "holder_name": f"{first_name} {last_name}",
+                "nationality": nationality,
+                "status": "active",
+                "verified_at": datetime.now().isoformat(),
+            },
+        }
+    
+    logger.warning(f"   ❌ Result: NOT FOUND - No visa record for {visa_number}")
+    return {
+        "success": True,
+        "verified": False,
+        "verification_status": "not_found",
+        "message": f"No visa record found for: {visa_number}",
+        "details": {
+            "visa_number": visa_number,
+        },
+    }

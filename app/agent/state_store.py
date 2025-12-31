@@ -45,6 +45,8 @@ class SessionStateStore:
         """Save state for a session."""
         state_file = self._get_state_file(session_id)
         try:
+            # Ensure directory exists (in case it was deleted)
+            self.storage_dir.mkdir(parents=True, exist_ok=True)
             with open(state_file, "w") as f:
                 json.dump(state, f, indent=2, default=str)
             logger.debug(f"Saved state for session {session_id}: {state}")

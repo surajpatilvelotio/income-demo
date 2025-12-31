@@ -5,11 +5,14 @@ https://strandsagents.com/latest/documentation/docs/user-guide/concepts/agents/s
 """
 
 import base64
+import logging
 import uuid
 from pathlib import Path
 from datetime import datetime, timezone
 
 from strands import tool
+
+logger = logging.getLogger(__name__)
 from strands.types.tools import ToolContext
 from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
@@ -23,6 +26,8 @@ from app.utils.async_helpers import run_sync
 
 # Limit per request (not per application - users can upload more over multiple requests)
 MAX_DOCUMENTS_PER_REQUEST = 3
+# No hard limit per application, but we track count for user feedback
+MAX_DOCUMENTS_PER_APPLICATION = 10  # Soft limit for display purposes
 
 
 @tool(context=True)
@@ -202,8 +207,11 @@ def initiate_kyc_process(tool_context: ToolContext, user_id: str | None = None) 
     Returns:
         Dictionary with KYC application details
     """
+    logger.info("🚀 [Initiate KYC] Tool called - starting KYC process")
+    
     # Get user_id from state if not provided
     effective_user_id = user_id or tool_context.agent.state.get("user_id")
+    logger.info(f"   👤 User ID: {effective_user_id}")
     if not effective_user_id:
         return {
             "success": False,
@@ -212,6 +220,8 @@ def initiate_kyc_process(tool_context: ToolContext, user_id: str | None = None) 
     
     async def _initiate():
         async with AsyncSessionLocal() as session:
+            from sqlalchemy.orm import selectinload
+            
             # Find user
             result = await session.execute(
                 select(User).where(User.id == effective_user_id)
@@ -224,24 +234,111 @@ def initiate_kyc_process(tool_context: ToolContext, user_id: str | None = None) 
                     "error": "User not found. Please register first.",
                 }
             
-            # Check for existing active application
+            # Check for existing active application (exclude failed/completed)
+            # Use order_by + first() to handle multiple applications gracefully
             existing = await session.execute(
                 select(KYCApplication)
                 .where(KYCApplication.user_id == effective_user_id)
                 .where(KYCApplication.status.in_(["initiated", "documents_uploaded", "processing"]))
+                .options(
+                    selectinload(KYCApplication.documents),
+                    selectinload(KYCApplication.stages),
+                )
+                .order_by(KYCApplication.created_at.desc())
             )
-            existing_app = existing.scalar_one_or_none()
-            if existing_app:
-                return {
-                    "success": True,
-                    "application_id": existing_app.id,
-                    "status": existing_app.status,
-                    "existing": True,
-                    "message": "You have an active KYC application. Let's continue with it.",
-                    "next_step": "Upload your ID card or passport to continue." if existing_app.status == "initiated" else "Your documents are being processed.",
-                }
+            existing_app = existing.scalars().first()
             
-            # Create application
+            # TODO: Resume handling disabled for now - uncomment to re-enable
+            # if existing_app:
+            #     # Build full context for resume
+            #     uploaded_docs = [
+            #         {"type": doc.document_type, "filename": doc.original_filename}
+            #         for doc in existing_app.documents
+            #     ]
+            #     uploaded_types = list(set(doc.document_type for doc in existing_app.documents if doc.document_type))
+            #     completed_stages = [s.stage_name for s in existing_app.stages if s.status == "completed"]
+            #     
+            #     # Extract per-document-type data from OCR results for state restoration
+            #     passport_data = None
+            #     visa_data = None
+            #     id_card_data = None
+            #     
+            #     for doc in existing_app.documents:
+            #         doc_type = (doc.document_type or "").lower()
+            #         ocr_result = doc.ocr_result  # Stored during OCR processing
+            #         
+            #         if ocr_result:
+            #             if doc_type == "passport":
+            #                 passport_data = ocr_result
+            #             elif doc_type == "visa" or "visa" in doc_type:
+            #                 visa_data = ocr_result
+            #             elif doc_type == "id_card":
+            #                 id_card_data = ocr_result
+            #     
+            #     # Compute is_non_local from extracted data
+            #     is_non_local = False
+            #     if existing_app.extracted_data:
+            #         from app.agent.kyc_workflow import check_nationality_match
+            #         nationality_check = check_nationality_match(existing_app.extracted_data)
+            #         is_non_local = not nationality_check.get("matches", True)
+            #     
+            #     # Determine next action based on current stage
+            #     current_stage = existing_app.current_stage or "initiated"
+            #     next_action = None
+            #     resume_message = ""
+            #     
+            #     if current_stage == "initiated":
+            #         next_action = "file_upload"
+            #         resume_message = "Please upload your identity document to continue."
+            #     elif current_stage == "document_uploaded":
+            #         next_action = "file_upload"
+            #         resume_message = "Your documents are uploaded. You can add more or proceed."
+            #     elif current_stage == "pending_user_review":
+            #         next_action = "confirm_data"
+            #         resume_message = "Please review and confirm your extracted information."
+            #     elif current_stage == "user_confirmed":
+            #         resume_message = "Your verification is in progress. Please wait."
+            #     elif current_stage in ["gov_verification", "fraud_check", "decision_made"]:
+            #         resume_message = "Your verification is being processed. Please wait for the result."
+            #     else:
+            #         resume_message = "Let's continue with your verification."
+            #     
+            #     logger.info(f"   🔄 Resuming existing application: {existing_app.id}, stage: {current_stage}")
+            #     
+            #     return {
+            #         "success": True,
+            #         "existing": True,
+            #         "application_id": existing_app.id,
+            #         "status": existing_app.status,
+            #         "current_stage": current_stage,
+            #         "uploaded_documents": uploaded_docs,
+            #         "uploaded_types": uploaded_types,
+            #         "completed_stages": completed_stages,
+            #         "extracted_data": existing_app.extracted_data,
+            #         "passport_data": passport_data,
+            #         "visa_data": visa_data,
+            #         "id_card_data": id_card_data,
+            #         "is_non_local": is_non_local,
+            #         "next_action": next_action,
+            #         "message": f"Welcome back! {resume_message}",
+            #     }
+            
+            # For now, just log if existing app found (resume disabled)
+            if existing_app:
+                logger.info(f"   ℹ️ Found existing application: {existing_app.id}, but resume is disabled - creating new one")
+            
+            # Check if user has a rejected application (allow new application)
+            rejected = await session.execute(
+                select(KYCApplication)
+                .where(KYCApplication.user_id == effective_user_id)
+                .where(KYCApplication.status == "failed")
+                .order_by(KYCApplication.created_at.desc())
+            )
+            rejected_app = rejected.scalars().first()
+            if rejected_app:
+                logger.info(f"   🔄 Previous application was rejected, creating new one")
+            
+            # Create new application
             application = KYCApplication(
                 user_id=effective_user_id,
                 status="initiated",
@@ -257,21 +354,53 @@ def initiate_kyc_process(tool_context: ToolContext, user_id: str | None = None) 
             
             return {
                 "success": True,
+                "existing": False,
                 "application_id": application.id,
                 "status": application.status,
-                "message": "KYC process initiated! Please upload your identity documents (ID card or passport) to continue.",
-                "next_step": "Upload your ID card or passport using the document upload feature.",
+                "current_stage": "initiated",
+                "next_action": "file_upload",
+                "message": "KYC process initiated! Please upload your identity document.",
             }
     
     try:
         result = run_sync(_initiate())
-        # Store application_id in agent state
+        # Store/restore state based on result
         if result.get("success"):
-            tool_context.agent.state.set("application_id", result["application_id"])
+            app_id = result["application_id"]
+            tool_context.agent.state.set("application_id", app_id)
             tool_context.agent.state.set("kyc_status", "in_progress")
-            tool_context.agent.state.set("workflow_stage", "initiated")
+            
+            # Set workflow stage based on current stage
+            current_stage = result.get("current_stage", "initiated")
+            tool_context.agent.state.set("workflow_stage", current_stage)
+            
+            # TODO: Resume state restoration disabled for now - uncomment to re-enable
+            # if result.get("existing"):
+            #     if result.get("extracted_data"):
+            #         tool_context.agent.state.set("merged_extracted_data", result["extracted_data"])
+            #         logger.info(f"   📦 Restored extracted data from previous session")
+            #     
+            #     # Restore per-document-type data for cross-validation
+            #     if result.get("passport_data"):
+            #         tool_context.agent.state.set("passport_data", result["passport_data"])
+            #         logger.info(f"   📦 Restored passport_data from DB")
+            #     if result.get("visa_data"):
+            #         tool_context.agent.state.set("visa_data", result["visa_data"])
+            #         logger.info(f"   📦 Restored visa_data from DB")
+            #     if result.get("id_card_data"):
+            #         tool_context.agent.state.set("id_card_data", result["id_card_data"])
+            #         logger.info(f"   📦 Restored id_card_data from DB")
+            #     
+            #     # Restore is_non_local flag
+            #     tool_context.agent.state.set("is_non_local", result.get("is_non_local", False))
+            #     logger.info(f"   🌍 Restored is_non_local={result.get('is_non_local', False)} from DB")
+            
+            logger.info(f"   ✅ KYC application {'resumed' if result.get('existing') else 'created'}: {app_id}")
+        else:
+            logger.warning(f"   ❌ Failed to initiate KYC: {result.get('error')}")
         return result
     except Exception as e:
+        logger.error(f"   ❌ Exception in initiate_kyc_process: {e}")
         return {"success": False, "error": str(e)}
 
 
@@ -580,6 +709,9 @@ def upload_kyc_document(
             )
             session.add(document)
             
+            # Count documents before adding this one
+            current_count = len(application.documents)
+            
             # Update application status
             application.status = "documents_uploaded"
             application.current_stage = "document_uploaded"
@@ -587,8 +719,9 @@ def upload_kyc_document(
             
             await session.commit()
             
-            new_count = current_count + 1
-            remaining = MAX_DOCUMENTS_PER_APPLICATION - new_count
+            # Calculate new totals
+            new_count = current_count + 1  # +1 because we just added one
+            remaining = max(0, MAX_DOCUMENTS_PER_APPLICATION - new_count)
             
             return {
                 "success": True,
@@ -767,15 +900,89 @@ def run_ocr_extraction(tool_context: ToolContext, application_id: str | None = N
             # Also get the merged data for display
             merged_data = ocr_result.get("merged_data", {})
             
-            return {
+            # Check nationality against target country
+            from app.agent.kyc_workflow import check_nationality_match
+            nationality_check = check_nationality_match(merged_data)
+            
+            # Build set of already uploaded document types
+            # Use OCR-detected types from the current extraction results (most accurate)
+            already_uploaded_types = set()
+            
+            # First, add types from the current OCR results (these are the freshest)
+            for doc_result in extracted_data:
+                doc_type = (doc_result.get("document_type") or "").lower()
+                # Normalize document types
+                if doc_type in ["passport", "id_card", "drivers_license"]:
+                    already_uploaded_types.add(doc_type)
+                elif doc_type == "visa" or "visa" in doc_type or "work_permit" in doc_type:
+                    already_uploaded_types.add("visa")
+                elif doc_type == "live_photo" or "selfie" in doc_type:
+                    already_uploaded_types.add("live_photo")
+            
+            # Then query for any previously uploaded documents (from earlier requests)
+            # Use a fresh session to get the latest data
+            async with AsyncSessionLocal() as fresh_session:
+                all_docs_result = await fresh_session.execute(
+                    select(KYCDocument).where(KYCDocument.application_id == effective_app_id)
+                )
+                all_docs = all_docs_result.scalars().all()
+                
+                for doc in all_docs:
+                    doc_type = doc.document_type.lower() if doc.document_type else ""
+                    # Normalize document types
+                    if doc_type in ["passport", "id_card", "drivers_license"]:
+                        already_uploaded_types.add(doc_type)
+                    elif doc_type == "visa" or "visa" in doc_type or "work_permit" in doc_type:
+                        already_uploaded_types.add("visa")
+                    elif doc_type == "live_photo" or "selfie" in doc_type or "photo" in doc_type:
+                        already_uploaded_types.add("live_photo")
+            
+            logger.info(f"   📋 Already uploaded document types: {already_uploaded_types}")
+            
+            result_data = {
                 "success": True,
                 "status": "pending_user_review",
                 "message": "I've extracted the following information from your documents. Please review and confirm if it's correct:",
                 "extracted_data": extracted_data,  # Array of per-document data
                 "merged_data": merged_data,  # Single merged object for display
                 "documents_processed": len(extracted_data),
-                "next_step": "Please confirm if this information is correct, or let me know what needs to be corrected.",
+                "nationality_check": nationality_check,  # Nationality validation result
+                "already_uploaded_types": list(already_uploaded_types),  # Types already in application
             }
+            
+            # Add appropriate next step based on nationality
+            if nationality_check["matches"]:
+                result_data["next_step"] = "Please confirm if this information is correct, or let me know what needs to be corrected."
+            else:
+                # For non-locals, check what additional docs are still needed
+                required_for_non_local = ["passport", "visa", "live_photo"]
+                missing_docs = [doc for doc in required_for_non_local if doc not in already_uploaded_types]
+                
+                if missing_docs:
+                    # Still need more documents
+                    result_data["requires_additional_docs"] = True
+                    result_data["required_docs"] = missing_docs
+                    
+                    # Build friendly message listing what's needed
+                    doc_names = {
+                        "passport": "passport",
+                        "visa": "visa or work permit",
+                        "live_photo": "selfie photo"
+                    }
+                    missing_names = [doc_names.get(d, d) for d in missing_docs]
+                    
+                    if len(missing_names) == 1:
+                        docs_str = missing_names[0]
+                    else:
+                        docs_str = ", ".join(missing_names[:-1]) + " and " + missing_names[-1]
+                    
+                    result_data["next_step"] = f"As you are from {nationality_check['detected_nationality']}, we still need your {docs_str} to complete verification."
+                else:
+                    # All additional docs are uploaded, proceed to confirmation
+                    result_data["next_step"] = "All required documents have been uploaded. Please confirm if the extracted information is correct."
+                    result_data["all_docs_uploaded"] = True
+            
+            return result_data
     
     try:
         # OCR can take 60+ seconds for complex documents, increase timeout
@@ -784,9 +991,60 @@ def run_ocr_extraction(tool_context: ToolContext, application_id: str | None = N
         if result.get("success"):
             tool_context.agent.state.set("workflow_stage", "ocr_completed")
             if result.get("extracted_data"):
-                tool_context.agent.state.set("extracted_data", result["extracted_data"])
+                # Merge new extracted data with existing data in state
+                existing_data = tool_context.agent.state.get("extracted_data") or []
+                new_data = result["extracted_data"]
+                
+                # Create a dict of existing docs by document_id for efficient lookup
+                existing_by_id = {doc.get("document_id"): doc for doc in existing_data if doc.get("document_id")}
+                
+                # Merge: add new docs, update existing ones
+                for new_doc in new_data:
+                    doc_id = new_doc.get("document_id")
+                    if doc_id:
+                        existing_by_id[doc_id] = new_doc
+                    else:
+                        existing_data.append(new_doc)
+                
+                merged_data = list(existing_by_id.values())
+                tool_context.agent.state.set("extracted_data", merged_data)
+                logger.info(f"   📦 State now contains {len(merged_data)} document(s)")
+                
+                # Store per-document-type data in state for cross-validation during verification
+                # This allows confirm_and_verify to restore passport_data, visa_data, etc.
+                for doc_result in new_data:
+                    doc_type = (doc_result.get("document_type") or "").lower()
+                    doc_extracted = doc_result.get("extracted_data", {})
+                    
+                    if doc_type == "passport":
+                        # Merge with existing passport data
+                        existing_passport = tool_context.agent.state.get("passport_data") or {}
+                        existing_passport.update(doc_extracted)
+                        tool_context.agent.state.set("passport_data", existing_passport)
+                        logger.info(f"   📌 Stored passport data in state")
+                    elif doc_type == "visa" or "visa" in doc_type or "work_permit" in doc_type:
+                        # Merge with existing visa data
+                        existing_visa = tool_context.agent.state.get("visa_data") or {}
+                        existing_visa.update(doc_extracted)
+                        tool_context.agent.state.set("visa_data", existing_visa)
+                        logger.info(f"   📌 Stored visa data in state")
+                    elif doc_type == "id_card":
+                        # Merge with existing id card data
+                        existing_id = tool_context.agent.state.get("id_card_data") or {}
+                        existing_id.update(doc_extracted)
+                        tool_context.agent.state.set("id_card_data", existing_id)
+                        logger.info(f"   📌 Stored ID card data in state")
+                
+                # Store merged data for quick access
+                if result.get("merged_data"):
+                    tool_context.agent.state.set("merged_extracted_data", result["merged_data"])
+                
+                # Store nationality check result
+                if result.get("nationality_check"):
+                    is_non_local = not result["nationality_check"].get("matches", True)
+                    tool_context.agent.state.set("is_non_local", is_non_local)
+                    logger.info(f"   🌍 User is {'non-local' if is_non_local else 'local'}")
         else:
-            # OCR failed - set appropriate workflow stage
             tool_context.agent.state.set("workflow_stage", "ocr_failed")
         return result
     except TimeoutError:
@@ -860,30 +1118,65 @@ def confirm_and_verify(tool_context: ToolContext, user_confirmed: bool = True, c
         # Set extracted data in workflow
         workflow.extracted_data = extracted_data
         
-        # Confirm data (auto-confirm since data was already set above)
-        await workflow.confirm_user_data(confirmed=True)
-        
-        # Run verification
-        verification_result = await workflow.run_full_verification()
-        
-        return verification_result
+        return workflow
     
     try:
         # Verification can take time for gov DB and fraud checks, increase timeout
-        result = run_sync(_verify(), timeout=120)
+        workflow = run_sync(_verify(), timeout=120)
+        
+        # Check if we got an error dict instead of a workflow
+        if isinstance(workflow, dict):
+            return workflow  # Return error
+        
+        # Restore per-document-type data from agent state
+        # This is needed for cross-validation during fraud detection
+        passport_data = tool_context.agent.state.get("passport_data")
+        visa_data = tool_context.agent.state.get("visa_data")
+        id_card_data = tool_context.agent.state.get("id_card_data")
+        is_non_local = tool_context.agent.state.get("is_non_local") or False
+        
+        if passport_data:
+            workflow.passport_data = passport_data
+            logger.info(f"   📦 Restored passport_data from state")
+        if visa_data:
+            workflow.visa_data = visa_data
+            logger.info(f"   📦 Restored visa_data from state")
+        if id_card_data:
+            workflow.id_card_data = id_card_data
+            logger.info(f"   📦 Restored id_card_data from state")
+        
+        workflow.is_non_local = is_non_local
+        logger.info(f"   🌍 Restored is_non_local={is_non_local} from state")
+        
+        # Confirm data (auto-confirm since data was already set above)
+        logger.info(f"   ✅ Confirming user data...")
+        confirm_result = run_sync(workflow.confirm_user_data(confirmed=True), timeout=30)
+        logger.info(f"   ✅ Confirm result: {confirm_result}")
+        
+        # Run verification
+        logger.info(f"   🔄 Running full verification...")
+        result = run_sync(workflow.run_full_verification(), timeout=120)
+        logger.info(f"   🔄 Verification result: {result}")
+        
         # Update state with final result
-        if result.get("status") == "approved":
+        # Handle both string and enum status values
+        status = result.get("status")
+        status_str = str(status.value) if hasattr(status, 'value') else str(status)
+        
+        if status_str == "approved" or "approved" in status_str.lower():
             tool_context.agent.state.set("workflow_stage", "completed")
             tool_context.agent.state.set("kyc_status", "approved")
             tool_context.agent.state.set("kyc_decision", "approved")
-        elif result.get("status") in ["rejected", "manual_review_required"]:
+        elif "rejected" in status_str.lower() or "manual_review" in status_str.lower():
             tool_context.agent.state.set("workflow_stage", "completed")
-            tool_context.agent.state.set("kyc_status", result.get("status"))
+            tool_context.agent.state.set("kyc_status", status_str)
             tool_context.agent.state.set("kyc_decision", result.get("decision", "rejected"))
         return result
     except TimeoutError:
+        logger.error(f"   ❌ Verification timed out for application {effective_app_id}")
         return {"success": False, "error": "Verification timed out. Please try again."}
     except Exception as e:
+        logger.error(f"   ❌ Exception in confirm_and_verify: {e}", exc_info=True)
         return {"success": False, "error": str(e)}
 
 

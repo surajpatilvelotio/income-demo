@@ -34,5 +34,9 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 60 * 24 * 7  # 7 days
 
+    # KYC Country Validation
+    # Target country for KYC - if user's nationality doesn't match, additional docs required
+    target_country: str = "SINGAPORE"
+
 
 settings = Settings()

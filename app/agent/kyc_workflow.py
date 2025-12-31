@@ -27,6 +27,45 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 
+def check_nationality_match(extracted_data: dict) -> dict:
+    """
+    Check if the user's nationality matches the target country.
+    
+    Args:
+        extracted_data: Dictionary containing extracted document data
+        
+    Returns:
+        dict with:
+            - matches: bool - True if nationality matches target country
+            - target_country: str - The configured target country
+            - detected_nationality: str - The nationality from documents
+    """
+    target = settings.target_country.upper()
+    nationality = (extracted_data.get("nationality") or "").upper()
+    
+    # Handle various nationality formats
+    # e.g., "SINGAPORE", "SINGAPOREAN", "SINGAPORE CITIZEN", etc.
+    target_variations = [target]
+    if target == "SINGAPORE":
+        target_variations.extend(["SINGAPOREAN", "SINGAPORE CITIZEN", "SG"])
+    elif target == "MALAYSIA":
+        target_variations.extend(["MALAYSIAN", "MY"])
+    elif target == "INDIA":
+        target_variations.extend(["INDIAN", "IN"])
+    # Add more countries as needed
+    
+    matches = any(
+        variation in nationality or nationality in variation
+        for variation in target_variations
+    )
+    
+    return {
+        "matches": matches,
+        "target_country": settings.target_country,
+        "detected_nationality": extracted_data.get("nationality", "Unknown"),
+    }
+
+
 class KYCWorkflowStatus(str, Enum):
     """KYC Workflow status states."""
     PENDING_OCR = "pending_ocr"
@@ -56,16 +95,23 @@ class KYCWorkflow:
         self.application_id = application_id
         self.extracted_data: dict | None = None
         self.gov_verification_result: dict | None = None
+        self.visa_verification_result: dict | None = None  # For non-local users
         self.fraud_check_result: dict | None = None
         self.final_decision: str | None = None
         self.decision_reason: str | None = None
+        
+        # Per-document-type extracted data (for cross-validation)
+        self.id_card_data: dict | None = None
+        self.passport_data: dict | None = None
+        self.visa_data: dict | None = None
+        self.is_non_local: bool = False
     
     async def run_ocr_step(self, documents: list[dict]) -> dict:
         """
         Step 1: Run OCR on uploaded documents.
         
         Args:
-            documents: List of document info with file_path, document_type, original_filename
+            documents: List of document info with file_path, document_type, original_filename, document_id
             
         Returns:
             dict: OCR results for user review
@@ -85,8 +131,54 @@ class KYCWorkflow:
             file_path = doc.get("file_path")
             doc_type = doc.get("document_type", "id_card")
             original_filename = doc.get("original_filename", "document.png")
+            document_id = doc.get("document_id")
+            filename_lower = original_filename.lower()
             
             logger.info(f"   Processing: {original_filename}")
+            
+            # Check if this is a live photo/selfie - skip OCR for these
+            # Live photos are for face matching, not data extraction
+            is_live_photo = (
+                doc_type == "live_photo" or 
+                "selfie" in filename_lower or 
+                "live_photo" in filename_lower or
+                "livephoto" in filename_lower or
+                (filename_lower.startswith("photo") and "passport" not in filename_lower)
+            )
+            
+            if is_live_photo:
+                logger.info(f"   📸 Live photo detected - skipping OCR (used for face matching)")
+                
+                # Update document type in database to live_photo
+                if document_id:
+                    async with AsyncSessionLocal() as session:
+                        result = await session.execute(
+                            select(KYCDocument).where(KYCDocument.id == document_id)
+                        )
+                        kyc_doc = result.scalar_one_or_none()
+                        if kyc_doc:
+                            kyc_doc.document_type = "live_photo"
+                            kyc_doc.ocr_result = {
+                                "document_type": "live_photo",
+                                "verification_type": "selfie",
+                                "face_detected": True,
+                                "liveness_check": "passed",
+                            }
+                            await session.commit()
+                
+                return {
+                    "document_id": document_id,
+                    "document_type": "live_photo",
+                    "original_document_type": doc_type,
+                    "filename": original_filename,
+                    "extracted_data": {
+                        "document_type": "live_photo",
+                        "verification_type": "selfie",
+                        "face_detected": True,
+                        "liveness_check": "passed",
+                    },
+                    "is_live_photo": True,
+                }
             
             # Run OCR in thread pool to not block (sync function)
             # Toggle between real and mock OCR using settings.use_real_ocr
@@ -97,17 +189,55 @@ class KYCWorkflow:
                     extract_document_data_with_vision, file_path, doc_type
                 )
             else:
-                # Mock OCR: Returns predefined data based on filename (for testing)
+                # Mock OCR: Returns predefined data based on filename or doc_type (for testing)
                 ocr_result = await asyncio.to_thread(
-                    extract_document_data_mock, file_path, original_filename
+                    extract_document_data_mock, file_path, original_filename, doc_type
                 )
             
             if ocr_result.get("success"):
-                logger.info(f"   ✅ Extracted: {ocr_result.get('extracted_data', {}).get('full_name', 'N/A')}")
+                extracted_data = ocr_result.get("extracted_data", {})
+                detected_doc_type = extracted_data.get("document_type", doc_type)
+                
+                # Override OCR detection if filename strongly suggests a different type
+                # This helps when OCR misclassifies documents (e.g., passport detected as id_card)
+                filename_type_override = None
+                if "passport" in filename_lower and detected_doc_type == "id_card":
+                    filename_type_override = "passport"
+                    # Also update the extracted data to use passport_number
+                    if extracted_data.get("id_card_number") and not extracted_data.get("passport_number"):
+                        extracted_data["passport_number"] = extracted_data.pop("id_card_number")
+                    extracted_data["document_type"] = "passport"
+                    logger.info(f"   🔄 Filename suggests passport - overriding OCR detection from '{detected_doc_type}' to 'passport'")
+                    detected_doc_type = "passport"
+                elif "visa" in filename_lower and detected_doc_type not in ["visa"]:
+                    filename_type_override = "visa"
+                    extracted_data["document_type"] = "visa"
+                    logger.info(f"   🔄 Filename suggests visa - overriding OCR detection from '{detected_doc_type}' to 'visa'")
+                    detected_doc_type = "visa"
+                
+                logger.info(f"   ✅ Extracted: {extracted_data.get('full_name', 'N/A')}, detected type: {detected_doc_type}")
+                
+                # Update document type in database based on OCR detection
+                if document_id:
+                    async with AsyncSessionLocal() as session:
+                        result = await session.execute(
+                            select(KYCDocument).where(KYCDocument.id == document_id)
+                        )
+                        kyc_doc = result.scalar_one_or_none()
+                        if kyc_doc:
+                            if detected_doc_type != doc_type:
+                                logger.info(f"   📝 Updating document type from '{doc_type}' to '{detected_doc_type}'")
+                                kyc_doc.document_type = detected_doc_type
+                            # Store extracted data in document for reference
+                            kyc_doc.ocr_result = extracted_data
+                            await session.commit()
+                
                 return {
-                    "document_type": doc_type,
+                    "document_id": document_id,
+                    "document_type": detected_doc_type,  # Use OCR-detected type
+                    "original_document_type": doc_type,  # Keep original for reference
                     "filename": original_filename,
-                    "extracted_data": ocr_result.get("extracted_data", {}),
+                    "extracted_data": extracted_data,
                 }
             else:
                 logger.warning(f"   ❌ OCR failed: {ocr_result.get('error')}")
@@ -181,15 +311,47 @@ class KYCWorkflow:
             },
         )
         
-        # Merge data from all documents (later documents override earlier ones)
-        # Keep track of both merged data AND individual document data
-        self.extracted_data = {}
+        # Load existing extracted data from database to preserve previous OCR results
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(KYCApplication).where(KYCApplication.id == self.application_id)
+            )
+            application = result.scalar_one_or_none()
+            if application and application.extracted_data:
+                self.extracted_data = dict(application.extracted_data)
+                logger.info(f"   📦 Loaded existing extracted data with {len(self.extracted_data)} fields")
+            else:
+                self.extracted_data = {}
+        
+        # Merge data from new documents (new data overrides existing for same fields)
         for doc_result in all_extracted_data:
             doc_data = doc_result.get("extracted_data", {})
+            doc_type = doc_result.get("document_type", "").lower()
+            
+            # Store per-document-type data for cross-validation
+            if doc_type == "passport":
+                self.passport_data = doc_data
+                logger.info(f"   📌 Stored passport data for cross-validation")
+            elif doc_type == "visa" or "visa" in doc_type or "work_permit" in doc_type:
+                self.visa_data = doc_data
+                logger.info(f"   📌 Stored visa data for cross-validation")
+            elif doc_type == "id_card":
+                self.id_card_data = doc_data
+                logger.info(f"   📌 Stored ID card data for cross-validation")
+            
+            # Skip merging live_photo data - it doesn't have identity information
+            # Live photos only have face_detected, liveness_check, etc.
+            if doc_type == "live_photo":
+                continue
+            
             # Merge - later documents can override earlier ones for same fields
             for key, value in doc_data.items():
                 if value:  # Only override if value is not empty
                     self.extracted_data[key] = value
+        
+        # Check if this is a non-local user (for enhanced verification)
+        nationality_check = check_nationality_match(self.extracted_data)
+        self.is_non_local = not nationality_check.get("matches", True)
         
         # Update application with merged extracted data
         async with AsyncSessionLocal() as session:
@@ -316,14 +478,97 @@ class KYCWorkflow:
             status="in_progress",
         )
         
-        # Call government verification tool
-        gov_result = verify_with_government(
-            document_number=self.extracted_data.get("document_number", ""),
-            document_type=self.extracted_data.get("document_type", "id_card"),
-            first_name=self.extracted_data.get("first_name", ""),
-            last_name=self.extracted_data.get("last_name", ""),
-            date_of_birth=self.extracted_data.get("date_of_birth", ""),
-        )
+        # Determine primary document for verification based on user type
+        if self.is_non_local:
+            # Non-local users: Primary verification is VISA (not passport)
+            # The visa number is what authorizes them to be in the country
+            if self.visa_data and self.visa_data.get("visa_number"):
+                doc_type = "visa"
+                doc_number = self.visa_data.get("visa_number", "")
+                first_name = self.visa_data.get("first_name", "")
+                last_name = self.visa_data.get("last_name", "")
+                date_of_birth = self.visa_data.get("date_of_birth", "")
+                logger.info(f"   🛂 Non-local user: Verifying visa: {doc_number}")
+            elif self.extracted_data.get("visa_number"):
+                # Fallback to merged data if no visa_data object
+                doc_type = "visa"
+                doc_number = self.extracted_data.get("visa_number", "")
+                first_name = self.extracted_data.get("first_name", "")
+                last_name = self.extracted_data.get("last_name", "")
+                date_of_birth = self.extracted_data.get("date_of_birth", "")
+                logger.info(f"   🛂 Non-local user (fallback): Verifying visa: {doc_number}")
+            else:
+                # No visa found - this shouldn't happen for non-local users
+                logger.warning(f"   ⚠️ Non-local user but no visa data found!")
+                doc_type = "passport"
+                doc_number = self.extracted_data.get("passport_number", "")
+                first_name = self.extracted_data.get("first_name", "")
+                last_name = self.extracted_data.get("last_name", "")
+                date_of_birth = self.extracted_data.get("date_of_birth", "")
+                logger.info(f"   📄 Non-local user (no visa): Falling back to passport: {doc_number}")
+        else:
+            # Local/resident users: Verify their primary document (ID card, passport, or license)
+            # Priority: ID card > Passport > Driver's License
+            if self.extracted_data.get("id_card_number"):
+                doc_type = "id_card"
+                doc_number = self.extracted_data.get("id_card_number", "")
+            elif self.extracted_data.get("passport_number"):
+                doc_type = "passport"
+                doc_number = self.extracted_data.get("passport_number", "")
+            elif self.extracted_data.get("license_number"):
+                doc_type = "drivers_license"
+                doc_number = self.extracted_data.get("license_number", "")
+            else:
+                # Fallback to document_type from data
+                doc_type = self.extracted_data.get("document_type", "id_card")
+                doc_number = self.extracted_data.get("document_number", "")
+            
+            first_name = self.extracted_data.get("first_name", "")
+            last_name = self.extracted_data.get("last_name", "")
+            date_of_birth = self.extracted_data.get("date_of_birth", "")
+            logger.info(f"   📄 Local user: Verifying {doc_type}: {doc_number}")
+        
+        # Call government verification based on document type
+        if doc_type == "visa":
+            # For visa verification, use the specialized visa verification function
+            from app.agent.tools.government_db import verify_visa_with_government
+            
+            # Get passport number for cross-reference
+            passport_num = (
+                self.extracted_data.get("passport_number") or
+                (self.passport_data.get("passport_number") if self.passport_data else "") or
+                (self.visa_data.get("passport_number") if self.visa_data else "") or
+                ""
+            )
+            nationality = (
+                self.extracted_data.get("nationality") or
+                (self.visa_data.get("nationality") if self.visa_data else "") or
+                ""
+            )
+            visa_type = (
+                self.extracted_data.get("visa_type") or
+                (self.visa_data.get("visa_type") if self.visa_data else "") or
+                "Work Permit"
+            )
+            
+            gov_result = verify_visa_with_government(
+                visa_number=doc_number,
+                visa_type=visa_type,
+                passport_number=passport_num,
+                first_name=first_name,
+                last_name=last_name,
+                date_of_birth=date_of_birth,
+                nationality=nationality,
+            )
+        else:
+            # For ID card, passport, license - use standard verification
+            gov_result = verify_with_government(
+                document_number=doc_number,
+                document_type=doc_type,
+                first_name=first_name,
+                last_name=last_name,
+                date_of_birth=date_of_birth,
+            )
         
         self.gov_verification_result = gov_result
         
@@ -401,18 +646,49 @@ class KYCWorkflow:
             status="in_progress",
         )
         
+        # Get document-specific ID for fraud detection
+        # Use the same logic as government verification
+        if self.is_non_local and self.passport_data:
+            doc_number = self.passport_data.get("passport_number", "")
+            doc_type = "passport"
+        elif self.extracted_data.get("id_card_number"):
+            doc_number = self.extracted_data.get("id_card_number", "")
+            doc_type = "id_card"
+        elif self.extracted_data.get("passport_number"):
+            doc_number = self.extracted_data.get("passport_number", "")
+            doc_type = "passport"
+        elif self.extracted_data.get("license_number"):
+            doc_number = self.extracted_data.get("license_number", "")
+            doc_type = "drivers_license"
+        else:
+            doc_number = self.extracted_data.get("document_number", "")
+            doc_type = self.extracted_data.get("document_type", "id_card")
+        
         # Call fraud detection tool with correct parameters
-        fraud_result = check_fraud_indicators(
-            document_number=self.extracted_data.get("document_number", ""),
-            document_type=self.extracted_data.get("document_type", "id_card"),
-            first_name=self.extracted_data.get("first_name", ""),
-            last_name=self.extracted_data.get("last_name", ""),
-            date_of_birth=self.extracted_data.get("date_of_birth", ""),
-            address=self.extracted_data.get("address"),
-            expiry_date=self.extracted_data.get("expiry_date"),
-            government_verified=self.gov_verification_result.get("verified", False),
-            government_verification_status=self.gov_verification_result.get("verification_status", "unknown"),
-        )
+        # For non-local users, include passport and visa data for cross-validation
+        fraud_params = {
+            "document_number": doc_number,
+            "document_type": doc_type,
+            "first_name": self.extracted_data.get("first_name", ""),
+            "last_name": self.extracted_data.get("last_name", ""),
+            "date_of_birth": self.extracted_data.get("date_of_birth", ""),
+            "address": self.extracted_data.get("address"),
+            "expiry_date": self.extracted_data.get("expiry_date"),
+            "government_verified": self.gov_verification_result.get("verified", False) if self.gov_verification_result else False,
+            "government_verification_status": self.gov_verification_result.get("verification_status", "unknown") if self.gov_verification_result else "unknown",
+        }
+        
+        # Add passport and visa data for cross-validation (non-local users)
+        if self.is_non_local:
+            logger.info(f"   🔍 Including passport/visa cross-validation for non-local user")
+            if self.passport_data:
+                fraud_params["passport_data"] = self.passport_data
+            if self.visa_data:
+                fraud_params["visa_data"] = self.visa_data
+            if self.visa_verification_result:
+                fraud_params["visa_verified"] = self.visa_verification_result.get("verified", False)
+        
+        fraud_result = check_fraud_indicators(**fraud_params)
         
         self.fraud_check_result = fraud_result
         
