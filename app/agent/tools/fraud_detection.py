@@ -1,5 +1,6 @@
 """Fraud detection tool for KYC verification."""
 
+import re
 from datetime import datetime, date
 
 from strands import tool
@@ -156,14 +157,22 @@ def check_fraud_indicators(
                 risk_score += 0.5
         
         # Check 5: Document number pattern validation
-        if document_type == "id_card" and not document_number.startswith("ID-"):
+        # Singapore NRIC format: [STFGM][0-9]{7}[A-Z] (e.g., S1234567A)
+        # Also accept legacy ID- prefix format for backwards compatibility
+        id_card_pattern = re.compile(r'^([STFGM]\d{7}[A-Z]|ID-.+)$', re.IGNORECASE)
+        # Passport format: 1-2 letters followed by 6-8 digits, or letter + 7-8 alphanumeric
+        # Examples: J8365854, AB1234567, PA12345678
+        # Also accept legacy PASS- prefix format for backwards compatibility
+        passport_pattern = re.compile(r'^([A-Z]{1,2}\d{6,8}|[A-Z]\d{7,8}[A-Z]?|PASS-.+)$', re.IGNORECASE)
+        
+        if document_type == "id_card" and not id_card_pattern.match(document_number):
             fraud_indicators.append({
                 "type": "suspicious_document_number",
                 "severity": "low",
                 "message": "ID card number does not follow expected pattern",
             })
             risk_score += 0.1
-        elif document_type == "passport" and not document_number.startswith("PASS-"):
+        elif document_type == "passport" and not passport_pattern.match(document_number):
             fraud_indicators.append({
                 "type": "suspicious_document_number",
                 "severity": "low",

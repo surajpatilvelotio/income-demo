@@ -596,14 +596,14 @@ class KYCWorkflow:
                     application.current_stage = "gov_verification_failed"
                     await session.commit()
                 
-                # Also update user status
-                user_result = await session.execute(
-                    select(User).where(User.id == application.user_id)
-                )
-                user = user_result.scalar_one_or_none()
-                if user:
-                    user.kyc_status = "manual_review"
-                    await session.commit()
+                    # Also update user status
+                    user_result = await session.execute(
+                        select(User).where(User.id == application.user_id)
+                    )
+                    user = user_result.scalar_one_or_none()
+                    if user:
+                        user.kyc_status = "manual_review"
+                        await session.commit()
             
             return {
                 "status": KYCWorkflowStatus.MANUAL_REVIEW_REQUIRED,
