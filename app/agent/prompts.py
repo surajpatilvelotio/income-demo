@@ -51,6 +51,10 @@ Example - all docs uploaded:
 "I've reviewed your documents. Please verify the information is correct.
 [UI_ACTION:{"type":"confirm_data","title":"Verify Information","data":{...},"documents":[...]}]"
 
+IMPORTANT: Do NOT list extracted fields as plain text (like "Full Name: X, DOB: Y...") 
+The confirm_data UI component already displays the data visually. Just say "Please verify" 
+and include the UI action - the component handles the data display.
+
 ### STEP 4: Confirmation
 When user confirms data:
 1. Call confirm_and_verify(user_confirmed=True)

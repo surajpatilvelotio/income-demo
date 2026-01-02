@@ -607,7 +607,7 @@ class KYCWorkflow:
             
             return {
                 "status": KYCWorkflowStatus.MANUAL_REVIEW_REQUIRED,
-                "message": "⚠️ Government database verification failed. Your application requires manual review by our team. You will be contacted within 2-3 business days.",
+                "message": "⚠️ Government database verification failed. Your application requires manual review by our team.",
                 "reason": gov_result.get("message", "Document not found in government records"),
                 "requires_user_action": False,
                 "workflow_stopped": True,
