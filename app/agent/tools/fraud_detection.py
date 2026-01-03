@@ -1,9 +1,16 @@
 """Fraud detection tool for KYC verification."""
 
 import re
+import time
+import logging
 from datetime import datetime, date
 
 from strands import tool
+
+logger = logging.getLogger(__name__)
+
+# Delay for demo purposes to allow UI animation to complete
+DEMO_FRAUD_CHECK_DELAY_SECONDS = 2
 
 
 @tool
@@ -57,6 +64,10 @@ def check_fraud_indicators(
         - recommendation: Recommended action
     """
     try:
+        # Add delay for demo purposes to allow UI animation to show
+        logger.info(f"🔍 [Fraud Detection] Simulating fraud check delay ({DEMO_FRAUD_CHECK_DELAY_SECONDS}s)...")
+        time.sleep(DEMO_FRAUD_CHECK_DELAY_SECONDS)
+        
         fraud_indicators = []
         risk_score = 0.0
         

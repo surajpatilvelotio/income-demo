@@ -1,6 +1,7 @@
 """Government database verification tool."""
 
 import logging
+import time
 from strands import tool
 from sqlalchemy import select
 
@@ -9,6 +10,10 @@ from app.db.models import MockGovernmentRecord
 from app.utils.async_helpers import run_sync
 
 logger = logging.getLogger(__name__)
+
+# Delay for demo purposes to allow UI animation to complete
+# Animation takes ~5 seconds to complete all checks, so we need at least 5s
+DEMO_VERIFICATION_DELAY_SECONDS = 6
 
 
 async def _async_verify(document_number: str, document_type: str, first_name: str, last_name: str, date_of_birth: str) -> dict:
@@ -159,6 +164,10 @@ def verify_with_government(
         - details: Additional verification details
     """
     try:
+        # Add delay for demo purposes to allow UI animation to show
+        logger.info(f"🏛️ [Gov Verification] Simulating verification delay ({DEMO_VERIFICATION_DELAY_SECONDS}s)...")
+        time.sleep(DEMO_VERIFICATION_DELAY_SECONDS)
+        
         return run_sync(_async_verify(
             document_number,
             document_type,
@@ -212,6 +221,10 @@ def verify_visa_with_government(
         - details: Additional verification details
     """
     from datetime import datetime, date
+    
+    # Add delay for demo purposes to allow UI animation to show
+    logger.info(f"🛂 [Visa Verification] Simulating verification delay ({DEMO_VERIFICATION_DELAY_SECONDS}s)...")
+    time.sleep(DEMO_VERIFICATION_DELAY_SECONDS)
     
     logger.info("🛂 [Visa Verification] Starting verification...")
     logger.info(f"   📄 Visa Type: {visa_type}")

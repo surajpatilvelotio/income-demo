@@ -69,6 +69,7 @@ def check_nationality_match(extracted_data: dict) -> dict:
 class KYCWorkflowStatus(str, Enum):
     """KYC Workflow status states."""
     PENDING_OCR = "pending_ocr"
+    DATA_EXTRACTED = "data_extracted"  # Documents processed, but more docs may be needed
     PENDING_USER_REVIEW = "pending_user_review"
     USER_CONFIRMED = "user_confirmed"
     GOV_VERIFICATION_PENDING = "gov_verification_pending"
@@ -353,6 +354,53 @@ class KYCWorkflow:
         nationality_check = check_nationality_match(self.extracted_data)
         self.is_non_local = not nationality_check.get("matches", True)
         
+        # Determine what document types have been uploaded
+        # Check BOTH current batch AND previously uploaded documents
+        already_uploaded_types = set()
+        
+        # First, add types from the current OCR results
+        for doc_result in all_extracted_data:
+            doc_type = doc_result.get("document_type", "").lower()
+            if doc_type in ["passport", "id_card", "drivers_license"]:
+                already_uploaded_types.add(doc_type)
+            elif doc_type == "visa" or "visa" in doc_type or "work_permit" in doc_type:
+                already_uploaded_types.add("visa")
+            elif doc_type == "live_photo" or "selfie" in doc_type or "photo" in doc_type:
+                already_uploaded_types.add("live_photo")
+        
+        # Then query for ALL documents in the application (including previous uploads)
+        async with AsyncSessionLocal() as session:
+            all_docs_result = await session.execute(
+                select(KYCDocument).where(KYCDocument.application_id == self.application_id)
+            )
+            all_docs = all_docs_result.scalars().all()
+            
+            for doc in all_docs:
+                doc_type = (doc.document_type or "").lower()
+                if doc_type in ["passport", "id_card", "drivers_license"]:
+                    already_uploaded_types.add(doc_type)
+                elif doc_type == "visa" or "visa" in doc_type or "work_permit" in doc_type:
+                    already_uploaded_types.add("visa")
+                elif doc_type == "live_photo" or "selfie" in doc_type or "photo" in doc_type:
+                    already_uploaded_types.add("live_photo")
+        
+        logger.info(f"   📋 All uploaded document types: {already_uploaded_types}")
+        
+        # Check if additional documents are needed for non-local users
+        requires_additional_docs = False
+        missing_docs = []
+        if self.is_non_local:
+            required_for_non_local = ["passport", "visa", "live_photo"]
+            missing_docs = [doc for doc in required_for_non_local if doc not in already_uploaded_types]
+            requires_additional_docs = len(missing_docs) > 0
+            logger.info(f"   📋 Non-local user: requires_additional_docs={requires_additional_docs}, missing={missing_docs}")
+        
+        # Set stage based on whether more documents are needed
+        # - "data_extracted" = Step 3 (Smart Document Capture) - still collecting documents
+        # - "pending_user_review" = Step 4 (Live Presence Confirmation) - ready for user to confirm
+        current_stage = "data_extracted" if requires_additional_docs else "pending_user_review"
+        workflow_status = KYCWorkflowStatus.DATA_EXTRACTED if requires_additional_docs else KYCWorkflowStatus.PENDING_USER_REVIEW
+        
         # Update application with merged extracted data
         async with AsyncSessionLocal() as session:
             result = await session.execute(
@@ -361,22 +409,28 @@ class KYCWorkflow:
             application = result.scalar_one_or_none()
             if application:
                 application.extracted_data = self.extracted_data
-                application.current_stage = "pending_user_review"
+                application.current_stage = current_stage
                 await session.commit()
         
         # Build response with both merged and individual document data
         response = {
             "success": True,
-            "status": KYCWorkflowStatus.PENDING_USER_REVIEW,
+            "status": workflow_status,
             "message": "Document data extracted successfully. Please review the information.",
             "extracted_data": all_extracted_data,  # Array of per-document data
             "extracted_data_for_review": all_extracted_data,  # Same array for backwards compatibility
             "merged_data": self.extracted_data,  # Single merged object for confirmation/verification
             "requires_user_action": True,
-            "next_action": "confirm_extracted_data",
+            "next_action": "confirm_extracted_data" if not requires_additional_docs else "upload_additional_docs",
             "documents_processed": len(all_extracted_data),
             "documents_attempted": len(documents),
         }
+        
+        # Add additional docs info for non-local users who need more documents
+        if requires_additional_docs:
+            response["requires_additional_docs"] = True
+            response["required_docs"] = missing_docs
+            response["already_uploaded_types"] = list(already_uploaded_types)
         
         # Add partial failure info if some documents failed
         if is_partial_success:

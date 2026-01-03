@@ -84,7 +84,7 @@ def register_user(email: str, phone: str, password: str, tool_context: ToolConte
                 "email": user.email,
                 "phone": user.phone,
                 "kyc_status": user.kyc_status,
-                "message": "Account created successfully! You can now start the KYC verification process.",
+                "message": "Account created successfully! You can now start the identity verification process.",
             }
     
     try:
@@ -195,7 +195,7 @@ def find_user_by_email(email: str, tool_context: ToolContext) -> dict:
 @tool(context=True)
 def initiate_kyc_process(tool_context: ToolContext, user_id: str | None = None) -> dict:
     """
-    Start the KYC verification process for a user.
+    Start the identity verification process for a user.
     
     Use this tool when a user wants to begin their identity verification.
     This creates a new KYC application that tracks the verification progress.
@@ -503,7 +503,7 @@ def get_user_kyc_applications(user_id: str) -> dict:
                 return {
                     "success": True,
                     "applications": [],
-                    "message": "No KYC applications found. Start the KYC process to begin verification.",
+                    "message": "No applications found. Start the identity verification process to begin.",
                 }
             
             apps_list = []
@@ -939,9 +939,22 @@ def run_ocr_extraction(tool_context: ToolContext, application_id: str | None = N
             
             logger.info(f"   📋 Already uploaded document types: {already_uploaded_types}")
             
+            # For non-locals, check what additional docs are still needed BEFORE setting status
+            requires_additional_docs = False
+            missing_docs = []
+            if not nationality_check["matches"]:
+                required_for_non_local = ["passport", "visa", "live_photo"]
+                missing_docs = [doc for doc in required_for_non_local if doc not in already_uploaded_types]
+                requires_additional_docs = len(missing_docs) > 0
+            
+            # Set status based on whether more documents are needed
+            # - "data_extracted" = Step 3 (Smart Document Capture) - still collecting documents
+            # - "pending_user_review" = Step 4 (Live Presence Confirmation) - ready for user to confirm
+            result_status = "data_extracted" if requires_additional_docs else "pending_user_review"
+            
             result_data = {
                 "success": True,
-                "status": "pending_user_review",
+                "status": result_status,
                 "message": "I've extracted the following information from your documents. Please review and confirm if it's correct:",
                 "extracted_data": extracted_data,  # Array of per-document data
                 "merged_data": merged_data,  # Single merged object for display
@@ -954,12 +967,8 @@ def run_ocr_extraction(tool_context: ToolContext, application_id: str | None = N
             if nationality_check["matches"]:
                 result_data["next_step"] = "Please confirm if this information is correct, or let me know what needs to be corrected."
             else:
-                # For non-locals, check what additional docs are still needed
-                required_for_non_local = ["passport", "visa", "live_photo"]
-                missing_docs = [doc for doc in required_for_non_local if doc not in already_uploaded_types]
-                
                 if missing_docs:
-                    # Still need more documents
+                    # Still need more documents - stay in Step 3
                     result_data["requires_additional_docs"] = True
                     result_data["required_docs"] = missing_docs
                     

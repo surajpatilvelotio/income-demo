@@ -926,8 +926,9 @@ async def kyc_chat(request: ChatRequest) -> ChatResponse:
                     .where(KYCApplication.user_id == user_id)
                     .where(KYCApplication.status.in_(["initiated", "documents_uploaded"]))
                     .order_by(KYCApplication.created_at.desc())
+                    .limit(1)
                 )
-                application = result.scalar_one_or_none()
+                application = result.scalars().first()
             
             if application:
                 # Save each document
@@ -1115,8 +1116,9 @@ async def kyc_chat_stream(request: ChatRequest):
                         .where(KYCApplication.user_id == user_id)
                         .where(KYCApplication.status.in_(["initiated", "documents_uploaded"]))
                         .order_by(KYCApplication.created_at.desc())
+                        .limit(1)
                     )
-                    application = result.scalar_one_or_none()
+                    application = result.scalars().first()
                 
                 if application:
                     saved_docs = []
@@ -1313,7 +1315,7 @@ async def kyc_chat_stream_form(
     message_with_context = message
     
     # Only add simple action hints (no IDs) for first message
-    if message.lower().strip() in ["start my kyc verification", "start kyc", "begin verification"]:
+    if message.lower().strip() in ["start identity verification", "start my kyc verification", "start kyc", "begin verification"]:
         if application_id:
             # User has active application - just continue
             message_with_context = message
@@ -1361,8 +1363,9 @@ async def kyc_chat_stream_form(
                         .where(KYCApplication.user_id == effective_user_id)
                         .where(KYCApplication.status.in_(["initiated", "documents_uploaded"]))
                         .order_by(KYCApplication.created_at.desc())
+                        .limit(1)
                     )
-                    application = result.scalar_one_or_none()
+                    application = result.scalars().first()
                 
                 if application:
                     saved_docs = []
