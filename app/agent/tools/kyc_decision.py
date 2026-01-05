@@ -174,9 +174,9 @@ def make_kyc_decision(
             decision_reason = "KYC approved based on: " + "; ".join(approval_factors)
             confidence = min(0.95, 0.7 + (ocr_confidence * 0.2) + (0.1 if government_verified else 0))
             next_steps = [
-                "User account will be activated",
-                "Member record will be created with extracted data",
-                "User can access full platform features",
+                "Identity verification complete",
+                "User profile verified with extracted data",
+                "User can proceed with services",
             ]
         
         # Finalize the decision in the database

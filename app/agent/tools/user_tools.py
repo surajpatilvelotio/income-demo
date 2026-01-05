@@ -1251,7 +1251,7 @@ def get_kyc_status(tool_context: ToolContext, application_id: str | None = None)
             # Determine user-friendly status
             if application.status == "completed":
                 if application.decision == "approved":
-                    status_message = "Your identity verification is complete and approved! Your account is now fully activated."
+                    status_message = "Your identity has been successfully verified."
                 else:
                     status_message = f"Your verification was not successful. Reason: {application.decision_reason}"
             elif application.status == "processing":

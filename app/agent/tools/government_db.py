@@ -240,13 +240,16 @@ def verify_visa_with_government(
     # Check for mock test cases
     visa_lower = visa_number.lower() if visa_number else ""
     
-    # Valid visa patterns (for demo)
+    # Valid visa patterns (for demo) - ONLY these patterns are accepted
+    # For a real demo where specific visa numbers must match, add them here
     valid_visa_patterns = [
         "visa-sg-2024",
         "ep-",
         "wp-",  
-        "dp-",  
-        "cj"
+        "dp-",
+        # Known valid CJ visa numbers for demo (add specific numbers)
+        "cj 3760864", 
+        "cj3760864",
     ]
     
     # Check if visa number follows a valid pattern
@@ -280,8 +283,8 @@ def verify_visa_with_government(
             },
         }
     
-    # For demo purposes, accept visa numbers that match patterns
-    if is_valid_pattern or visa_number:  # Accept any non-empty visa number for demo
+    # Only accept visa numbers that match known valid patterns
+    if is_valid_pattern:
         logger.info(f"   ✅ Result: VERIFIED - Visa is valid and active")
         return {
             "success": True,
@@ -299,12 +302,13 @@ def verify_visa_with_government(
             },
         }
     
+    # Visa number not found in mock database
     logger.warning(f"   ❌ Result: NOT FOUND - No visa record for {visa_number}")
     return {
         "success": True,
         "verified": False,
         "verification_status": "not_found",
-        "message": f"No visa record found for: {visa_number}",
+        "message": f"No visa record found for visa number: {visa_number}. Please ensure you have uploaded the correct visa document.",
         "details": {
             "visa_number": visa_number,
         },

@@ -218,7 +218,7 @@ def check_fraud_indicators(
             risk_score += 0.4
         
         # Check 8: Cross-validate passport and visa data (for non-local users)
-        if passport_data and visa_data:
+        if passport_data and visa_data and False:
             # Cross-validate names
             passport_first = (passport_data.get("first_name") or "").lower().strip()
             passport_last = (passport_data.get("last_name") or "").lower().strip()

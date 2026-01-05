@@ -1425,8 +1425,12 @@ async def kyc_chat_stream_form(
                         await session.commit()
                         
                         # Get the IDs of documents just uploaded (most recent N documents)
+                        # IMPORTANT: Sort by uploaded_at to ensure we get the correct recent docs
                         await session.refresh(application, ['documents'])
-                        recent_doc_ids = [doc.id for doc in application.documents[-len(saved_docs):]]
+                        # Use a very old datetime as fallback for None values
+                        epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+                        sorted_docs = sorted(application.documents, key=lambda d: d.uploaded_at or epoch, reverse=True)
+                        recent_doc_ids = [doc.id for doc in sorted_docs[:len(saved_docs)]]
                         
                         # Add upload context to message with document IDs for OCR
                         message_with_uploads = f"{message_with_context}\n\n[SYSTEM: User has uploaded {len(saved_docs)} document(s): {', '.join(saved_docs)}. Document IDs: {','.join(recent_doc_ids)}. Call run_ocr_extraction with document_ids parameter to process ONLY these documents.]"

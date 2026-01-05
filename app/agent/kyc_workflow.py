@@ -812,7 +812,7 @@ class KYCWorkflow:
             return {
                 "status": KYCWorkflowStatus.APPROVED,
                 "decision": "approved",
-                "message": "🎉 Congratulations! Your identity has been verified. Your account is now fully active.",
+                "message": "🎉 Congratulations! Your identity has been successfully verified.",
                 "reason": self.decision_reason,
             }
         else:
