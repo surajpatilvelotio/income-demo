@@ -24,7 +24,7 @@ async def seed_mock_government_records(session: AsyncSession) -> None:
             document_type="id_card",
             first_name="MARIE",
             last_name="JUMIO",
-            date_of_birth=date(1975, 01, 01),
+            date_of_birth=date(1975, 1, 1),
             address={"country": "SINGAPORE"},
             is_valid=True,
             is_flagged=False,
