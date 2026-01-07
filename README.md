@@ -27,7 +27,7 @@ make install
 # or: uv sync
 
 # Copy environment file
-cp .env.example .env
+# cp .env.example .env
 # Configure AWS credentials in .env
 ```
 
