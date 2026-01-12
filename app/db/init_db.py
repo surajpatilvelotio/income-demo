@@ -99,8 +99,13 @@ async def seed_mock_government_records(session: AsyncSession) -> None:
 async def seed_initial_users(session: AsyncSession) -> None:
     """Seed initial user accounts for testing."""
     
-    # Check if users already exist
-    result = await session.execute(select(User).limit(1))
+    # Define seed user emails
+    seed_emails = ["kopal.gupta@outlook.com", "anand@gmail.com"]
+    
+    # Check if seed users specifically exist
+    result = await session.execute(
+        select(User).where(User.email.in_(seed_emails)).limit(1)
+    )
     if result.scalar_one_or_none() is not None:
         return  # Already seeded
     
