@@ -6,7 +6,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.db.database import AsyncSessionLocal, init_db
-from app.db.models import MockGovernmentRecord
+from app.db.models import MockGovernmentRecord, User
+from app.services.password import hash_password
 
 
 async def seed_mock_government_records(session: AsyncSession) -> None:
@@ -95,6 +96,44 @@ async def seed_mock_government_records(session: AsyncSession) -> None:
     await session.commit()
 
 
+async def seed_initial_users(session: AsyncSession) -> None:
+    """Seed initial user accounts for testing."""
+    
+    # Check if users already exist
+    result = await session.execute(select(User).limit(1))
+    if result.scalar_one_or_none() is not None:
+        return  # Already seeded
+    
+    # Default password for initial users (they should change it after first login)
+    default_password = hash_password("TestPass123")
+    
+    initial_users = [
+        User(
+            email="kopal.gupta@outlook.com",
+            phone="1-5235-89282",
+            password_hash=default_password,
+            first_name="Kopal",
+            last_name="Gupta",
+            date_of_birth=date(1986, 10, 6),
+            kyc_status="pending",
+        ),
+        User(
+            email="anand@gmail.com",
+            phone="91-8947293201",
+            password_hash=default_password,
+            first_name="Anand",
+            last_name="Kumar",
+            date_of_birth=date(1985, 5, 24),
+            kyc_status="pending",
+        ),
+    ]
+    
+    for user in initial_users:
+        session.add(user)
+    
+    await session.commit()
+
+
 async def initialize_database() -> None:
     """Initialize database tables and seed data."""
     # Create all tables
@@ -103,6 +142,7 @@ async def initialize_database() -> None:
     # Seed mock data
     async with AsyncSessionLocal() as session:
         await seed_mock_government_records(session)
+        await seed_initial_users(session)
 
 
 if __name__ == "__main__":
