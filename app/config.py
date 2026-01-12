@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     session_storage_dir: str = "./sessions"
 
     # Database
-    database_url: str = "postgresql+asyncpg://postgres:admin@localhost:5432/ekyc"
+    database_url: str = "postgresql+asyncpg://postgres:admin@localhost:5432/ekyc1"
     database_echo: bool = False
 
     # File uploads

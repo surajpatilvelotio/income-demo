@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.db.database import AsyncSessionLocal, init_db
-from app.db.models import MockGovernmentRecord, User
+from app.db.models import MockGovernmentRecord, User, generate_member_id
 from app.services.password import hash_password
 
 
@@ -135,6 +135,13 @@ async def seed_initial_users(session: AsyncSession) -> None:
     
     for user in initial_users:
         session.add(user)
+    
+    # Flush to get auto_id from database
+    await session.flush()
+    
+    # Generate member_id for each user based on their auto_id
+    for user in initial_users:
+        user.member_id = generate_member_id(user.auto_id)
     
     await session.commit()
 
